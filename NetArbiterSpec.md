@@ -6,7 +6,6 @@ netFD := WaitForConnection(port : int, var address)
 
 # Requirements
 - Must be able to accept connections (regardless of "mode")
-- Must be able to 
 - Must be able to passthrough packets
 - Must be able to send UDP packets at a reliable rate
 
@@ -36,6 +35,10 @@ S -> D: Disconnect Notify
 
 Transparent passthrough of data
 
+Ack (Establish):
+```arb1```
+Disconnect Notify:
+```arb2```
 
 ## Endpoint - Arbiter
 Exit:
@@ -70,9 +73,14 @@ Connection Closed by Remote
 Data Receive:
 ```[connID : 2][size : 2][payload]```
 
+Data Sent Successfully:
+```arb:S```
+
+Error:
+```arb:W[errorCode : 2]```
 
 ### Defined Commands:
 
 | ID (char) | Name | Payload | Description |
-|-----------------------------------------|
-| 0x45('E') | ESTABLISH | [port][address] | Establishes a connection to a remote arbiter |
+|-----------|------|---------|-------------|
+| 0x45('C') | CONNECT | [address : lstring][port : 2] | Establishes a connection to a remote arbiter |

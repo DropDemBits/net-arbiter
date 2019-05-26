@@ -1,13 +1,12 @@
 package ddb.io.netarbiter;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.net.DatagramSocket;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.io.*;
+import java.net.*;
+import java.nio.Buffer;
+import java.rmi.Remote;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Random;
 
 /**
@@ -36,14 +35,20 @@ public class NetArbiter {
     private static final String ARBI_ID = "arb:";
 
     private int connectionPort;
-    //private DatagramSocket remoteSocket;
+    private List<RemoteConnection> outboundConnections;
+    private List<RemoteConnection> inboundConnections;
 
     private NetArbiter(int connectionPort) {
         this.connectionPort = connectionPort;
+
+        outboundConnections = new ArrayList<> ();
+        inboundConnections = new ArrayList<> ();
     }
 
+    // TODO: Convert over to ZBE
+
     // Decode data
-    private int parseInt(char[] data, int offset, int bytes) {
+    private int parseInt(byte[] data, int offset, int bytes) {
         assert (bytes > 0 && bytes <= 4);
 
         // Don't parse outside the buffer
@@ -53,7 +58,7 @@ public class NetArbiter {
         long num = 0;
 
         for (int i = 0; i < (bytes * 2); i++) {
-            char cval = Character.toLowerCase(data[i + offset]);
+            char cval = Character.toLowerCase((char)data[i + offset]);
             int digit = 0;
 
             // Make way for the new digit
@@ -70,13 +75,18 @@ public class NetArbiter {
         return (int)num;
     }
 
-    private String copyString (char[] data, int offset, int length) {
-        // Check if in the bounds of the data buffer
+    private String copyString (byte[] data, int offset, int length) {
+        // Check if it's in the bounds of the data buffer
         if (offset + length >= data.length)
             return "";
 
         // Get the targeted string segment
-        return String.valueOf(data, offset, length);
+        StringBuilder result = new StringBuilder(length);
+
+        for (int i = 0; i < length; i ++)
+            result.append((char)data[i + offset]);
+
+        return result.toString();
     }
 
     // Encode data
@@ -110,44 +120,17 @@ public class NetArbiter {
      * - Waits for a connection from the program
      */
     private void start() {
+        System.out.println("Waiting for Connection");
+
         try(
                 ServerSocket serverSocket = new ServerSocket(connectionPort);
                 Socket endpointSocket = serverSocket.accept();
-                PrintWriter out = new PrintWriter(endpointSocket.getOutputStream(), true);
-                BufferedReader in = new BufferedReader(new InputStreamReader(endpointSocket.getInputStream()))) {
+                BufferedOutputStream out = new BufferedOutputStream(endpointSocket.getOutputStream());
+                BufferedInputStream in = new BufferedInputStream(endpointSocket.getInputStream())) {
             System.out.println("Connection Established");
 
-            // Wait for data to send
-            /*String inputLine;
-            long reportingPeriod = System.currentTimeMillis();
-            long numTransfers = 0;
-            long totTransfers = 0;
-            long reportedTransfers = 0;
-
-            while((inputLine = in.readLine()) != null) {
-                //System.out.println("Recv: " + inputLine);
-
-                // Don't send \r as Turing automagically consumes carriage
-                // returns
-                out.print("AAAA: " + inputLine + '\n');
-                out.flush();
-
-                // Calculate number of transfers
-                numTransfers += 1;
-
-                if((System.currentTimeMillis() - reportingPeriod) > 1000) {
-                    reportingPeriod = System.currentTimeMillis();
-
-                    totTransfers += numTransfers;
-                    reportedTransfers ++;
-
-                    System.out.println(numTransfers + " T/S (Avg " + totTransfers / reportedTransfers + " T/S)");
-                    numTransfers = 0;
-                }
-            }*/
-
-            char[] packet_buffer = new char[1500];
-            int packet_size = 0;
+            byte[] packet_buffer = new byte[1500];
+            int packet_size;
 
             while ((packet_size = in.read(packet_buffer, 0, packet_buffer.length)) != 0) {
                 if (packet_size == -1)
@@ -155,8 +138,6 @@ public class NetArbiter {
 
                 if (packet_size < 4)
                     continue;
-
-                //System.out.println(new String(packet_buffer));
 
                 int offset = 0;
                 boolean isControl = true;
@@ -169,6 +150,7 @@ public class NetArbiter {
                 }
 
                 if (isControl) {
+                    String send_data = "";
                     // Received packet is a control one
 
                     offset += ARBI_ID.length() + 1;
@@ -184,24 +166,33 @@ public class NetArbiter {
                             // Remote connection establish
 
                             // Get port
-                            int rport = parseInt(packet_buffer, offset, 2);
+                            int remotePort = parseInt(packet_buffer, offset, 2);
                             offset += 4;
 
                             // Get address
                             int length = parseInt(packet_buffer, offset, 1);
                             String address = copyString(packet_buffer, offset + 2, length);
 
-                            System.out.println("Connecting to " + rport + ":" + address);
+                            // Connect to the remote arbiter
+                            int connId = tryConnectingTo (address, remotePort);
+                            if (connId == -1) {
+                                // Send back the error
+                                send_data += ARBI_ID;
+                                send_data += 'W';
+                                send_data += toNetInt(1, 2);
 
-                            // Send back the new connection ID
-                            String send_data = "";
+                                out.write(send_data.getBytes());
+                                out.flush();
+                            }
+                            else {
+                                // Send back the new connection ID
+                                send_data += ARBI_ID;
+                                send_data += 'E';
+                                send_data += toNetInt(connId, 2);
 
-                            send_data += ARBI_ID;
-                            send_data += 'E';
-                            send_data += toNetInt(new Random().nextInt() & 0xFFFF, 2);
-
-                            out.print(send_data);
-                            out.flush();
+                                out.write(send_data.getBytes());
+                                out.flush();
+                            }
                             break;
                         }
                         case 'D': {
@@ -209,6 +200,21 @@ public class NetArbiter {
                             int conID = parseInt(packet_buffer, offset, 2);
 
                             System.out.println("Disconnecting connection #" + conID);
+                            if (conID < 0 || conID > outboundConnections.size()) {
+                                // Send back the error
+                                send_data += ARBI_ID;
+                                send_data += 'W';
+                                send_data += toNetInt(2, 2);
+
+                                out.write(send_data.getBytes());
+                                out.flush();
+                            }
+                            else {
+                                // Send the disconnect
+                                outboundConnections.get(conID).disconnect();
+                                outboundConnections.remove(conID);
+                            }
+
                             break;
                         }
                         case 'L': {
@@ -228,17 +234,39 @@ public class NetArbiter {
                     offset += 4;
 
                     System.out.println("Sending over data to #" + connID + ":");
-                    System.out.println(String.valueOf(packet_buffer, offset, packet_size - offset));
+                    System.out.println(copyString(packet_buffer, offset, packet_size - offset));
+
+                    RemoteConnection connection = outboundConnections.get(connID);
+                    connection.write (packet_buffer, offset, packet_size - offset);
                 }
 
                 // Fill the array again
-                Arrays.fill(packet_buffer, (char)0xFF);
+                Arrays.fill(packet_buffer, (byte)0xFF);
             }
 
             System.out.println("Cleaned up resources");
         } catch (IOException e) {
             System.out.println("Exception when trying to listen to port " + connectionPort);
             System.out.println(e.getMessage());
+        }
+    }
+
+    private int tryConnectingTo(String address, int remotePort) {
+        System.out.println("Connecting to " + address + ":" + remotePort);
+
+        try {
+            Socket remoteSocket = new Socket(address, remotePort);
+
+            RemoteConnection connection = new RemoteConnection(remoteSocket);
+            outboundConnections.add(connection);
+
+            // Establish the connection
+            connection.establish ();
+
+            return outboundConnections.indexOf(connection);
+        } catch (IOException e) {
+            e.printStackTrace();
+            return -1;
         }
     }
 

@@ -38,12 +38,12 @@ fcn parseInt ( data : string, bytes : nat1 ) : nat4
         num *= 16
     
         if data (i) >= '0' and data (i) <= '9' then
-            num += data (i) - '0'
-        elsif data (i) >= 'a' and data (i) <= 'b'
-            num += (data (i) - 'a') + 10
+            num += ord(data (i)) - ord('0')
+        elsif data (i) >= 'a' and data (i) <= 'b' then
+            num += (ord(data (i)) - ord('a')) + 10
         end if
     end for
-    
+
     result num
 end parseInt
 
@@ -61,24 +61,29 @@ fcn readPacket () : nat4
     if packet_id = "arb:" then
         var command_id : char
         var data : string
+        var connectionID : nat4
         
         % Get command id
         read : netSock, command_id : 1
         
         % Since most of the received packets have a connection id,
-        % read the connection id
+        % read and parse the connection id
         read : netSock, data : 4
+        connectionID := parseInt(data, 2)
         
         case command_id of
         label 'E':
-            put "Established remote connection at #", data
+            put "Established remote connection at #", connectionID
         label 'N':
-            put "New connection at #", data
+            put "New connection at #", connectionID
         label 'R':
-            put "Remote connection closed on #", data
+            put "Remote connection closed on #", connectionID
+        label 'W':
+            put "Error"
         end case
         
-        result parseInt(data)
+        % Return connection id
+        result connectionID
     end if
     
     result cheat(nat4, -1)
@@ -98,8 +103,11 @@ put "Connection opened with arbiter"
 
 % Connect to remote
 put "Sending opening connection"
-var port : nat4 := 6886
-var address : string := "localhost"
+var port : nat4
+var address : string
+
+port := 8080
+address := "localhost"
 
 conSend := ""
 conSend += CONNECT
@@ -115,13 +123,19 @@ loop
 end loop
 
 put Net.BytesAvailable(netSock)
-readPacket()
+var conId : nat4 := readPacket()
 
 Input.Pause()
 
 % Send a few data bits to remote
-% Disconnect from remote
+conSend := ""
+conSend += toNetInt (conId, 2)
+conSend += "the payload is great!"
+write : netSock, conSend : length(conSend)
 
+Input.Pause()
+
+% Disconnect from remote
 put "Sending connection exit"
 
 conSend := ""
