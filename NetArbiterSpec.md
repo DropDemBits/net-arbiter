@@ -47,16 +47,13 @@ It is the endpoint's responsibility for closing the connection.
 All remote connections will be closed by the arbiter.
 
 Connect To:
-```arb:C[port : 2][strlen : 1][address : string]```
+```arb:C[port : 2][address : lstring]```
 
 Disconnect:
 ```arb:D[connID : 2]```
 
-Listen On:
-```arb:L[port : 2]```
-
 Send Data:
-```[connID : 2][payload]```
+```[connID : 2][size : 2][payload]```
 
 Arbiter must ignore any invalid command id's and invalid commands
 
@@ -70,17 +67,18 @@ New Connection (D -> ES)
 Connection Closed by Remote
 ```arb:R[connID : 2]``` 
 
-Data Receive:
-```[connID : 2][size : 2][payload]```
-
 Data Sent Successfully:
 ```arb:S```
 
 Error:
 ```arb:W[errorCode : 2]```
 
+Data Receive:
+```[connID : 2][size : 2][payload]```
+
 ### Defined Commands:
 
 | ID (char) | Name | Payload | Description |
 |-----------|------|---------|-------------|
-| 0x45('C') | CONNECT | [address : lstring][port : 2] | Establishes a connection to a remote arbiter |
+| 0x45('C') | CONNECT | ```[port : 2][address : lstring]``` | Establishes a connection to a remote arbiter |
+|    N/A    | SEND_DATA | ```[connID : 2][size : 2][payload]``` | Sends the given data to a remote arbiter |

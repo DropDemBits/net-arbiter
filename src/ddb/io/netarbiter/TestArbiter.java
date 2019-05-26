@@ -3,6 +3,9 @@ package ddb.io.netarbiter;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
+
+import static ddb.io.netarbiter.Constants.*;
 
 public class TestArbiter {
 
@@ -31,27 +34,33 @@ public class TestArbiter {
             System.out.println("Stream established");
 
             // Wait for a client connection
-            byte [] data = new byte [1500];
+            byte[] data = new byte[1500];
             int length;
 
             while ((length = in.read(data, 0, data.length)) != 0) {
                 // Read the packet ID
-                int packetID = StreamSerializer.getInt (data, 0);
+                int packetID = StreamSerializer.getInt(data, 0);
 
-                if ((packetID & PacketIDs.PCKTID_HEADER) == PacketIDs.PCKTID_HEADER) {
+                if ((packetID & PCKTID_HEADER) == PCKTID_HEADER) {
                     switch (packetID & 0xFF) {
-                        case PacketIDs.PCKTID_CONNECT_ESTABLISH:
+                        case PCKTID_CONNECT_ESTABLISH:
                             System.out.println("Connection requested from client");
 
                             // Send an ack for the connection request
-                            out.write(PacketIDs.PCKTID_HEADER | PacketIDs.PCKTID_ACK);
+                            byte[] temp = new byte[4];
+                            StreamSerializer.appendInt(temp, 0, PCKTID_HEADER | PCKTID_ACK);
+
+                            out.write(temp);
                             out.flush();
-                        case PacketIDs.PCKTID_DISCONNECT_NOTIFY:
+                            break;
+                        case PCKTID_DISCONNECT_NOTIFY:
                             System.out.println("Disconnection from client");
                             break;
+                        default:
+                            System.out.println("Invalid interconnect id: " + Integer.toHexString(packetID & 0xFF));
+                            break;
                     }
-                }
-                else {
+                } else {
                     System.out.println("Data Received");
                     System.out.println(Integer.toHexString(data[0]));
                     System.out.println(Integer.toHexString(data[1]));
@@ -59,7 +68,7 @@ public class TestArbiter {
                     System.out.println(Integer.toHexString(data[3]));
 
                     for (int i = 0; i < length; i++)
-                        System.out.print((char)data[i]);
+                        System.out.print((char) data[i]);
 
                     System.out.println();
                 }

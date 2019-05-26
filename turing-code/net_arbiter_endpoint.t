@@ -61,30 +61,36 @@ fcn readPacket () : nat4
     if packet_id = "arb:" then
         var command_id : char
         var data : string
-        var connectionID : nat4
+        var param : nat4 := 0
         
-        % Get command id
+        % Get response id
         read : netSock, command_id : 1
         
-        % Since most of the received packets have a connection id,
-        % read and parse the connection id
-        read : netSock, data : 4
-        connectionID := parseInt(data, 2)
+        % Since most of the received packets have a parameter
+        % (except sent_success), read and parse the connection id
+        if command_id not= 'S' then
+            read : netSock, data : 4
+            param := parseInt(data, 2)
+        end if
         
         case command_id of
         label 'E':
-            put "Established remote connection at #", connectionID
+            put "Established remote connection at #", param
         label 'N':
-            put "New connection at #", connectionID
+            put "New connection at #", param
         label 'R':
-            put "Remote connection closed on #", connectionID
+            put "Remote connection closed on #", param
         label 'W':
-            put "Error"
+            put "Error #", param
+        label 'S':
+            put "Data successfully sent"
         end case
         
-        % Return connection id
-        result connectionID
+        % Return the parameter
+        result param
     end if
+    
+    put ""
     
     result cheat(nat4, -1)
 end readPacket
@@ -117,7 +123,7 @@ conSend += address
 write : netSock, conSend : length(conSend)
 
 % Acquire Connection ID
-
+put "Waiting for a response..."
 loop
     exit when Net.BytesAvailable(netSock) > 0
 end loop
@@ -125,15 +131,26 @@ end loop
 put Net.BytesAvailable(netSock)
 var conId : nat4 := readPacket()
 
-Input.Pause()
-
 % Send a few data bits to remote
+put "Sending example payload..."
+var payload : string := "the payload is great!"
 conSend := ""
 conSend += toNetInt (conId, 2)
-conSend += "the payload is great!"
+conSend += toNetInt(length(payload), 2)
+conSend += payload
 write : netSock, conSend : length(conSend)
 
-Input.Pause()
+put "Waiting for a response..."
+loop
+    exit when Net.BytesAvailable(netSock) > 0
+end loop
+
+put Net.BytesAvailable(netSock)
+var resp : nat4 := readPacket()
+
+if resp not= 0 then
+    put "Error in sending data: ", resp
+end if
 
 % Disconnect from remote
 put "Sending connection exit"

@@ -1,47 +1,63 @@
 package ddb.io.netarbiter;
 
 import java.io.*;
-import java.net.Socket;
-import java.util.stream.Stream;
+import java.nio.ByteBuffer;
+import java.nio.channels.SocketChannel;
 
-import static ddb.io.netarbiter.PacketIDs.*;
+import static ddb.io.netarbiter.Constants.*;
 
 public class RemoteConnection {
 
-    private Socket socket;
-    private InputStream in;
-    private OutputStream out;
+    private SocketChannel channel;
 
-    RemoteConnection (Socket socket) {
-        this.socket = socket;
-
-        try {
-            this.in = new BufferedInputStream(socket.getInputStream());
-            this.out = new BufferedOutputStream(socket.getOutputStream());
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+    RemoteConnection (SocketChannel channel) {
+        this.channel = channel;
     }
 
     /**
      * Sends over the appropriate packets in order to establish a connection
      */
     public boolean establish() throws IOException {
-        byte[] data = new byte[4];
-        StreamSerializer.appendInt(data, 0, PCKTID_HEADER | PCKTID_CONNECT_ESTABLISH);
-        out.write(data, 0, data.length);
-        out.flush();
+        // Connection is already closed, no need to do anything
+        /*if (!channel.isConnected()) {
+            System.out.println("Warning: An establish-after-close was attempted");
+            return true;
+        }*/
+
+        ByteBuffer temporary = ByteBuffer.allocate(8);
+        temporary.putInt(PCKTID_HEADER | PCKTID_CONNECT_ESTABLISH);
+
+        // Send connection establish
+        temporary.flip();
+        channel.write(temporary);
 
         // Listen for the response
-        int length = in.read(data, 0, data.length);
-        int response = StreamSerializer.getInt(data, 0);
+        temporary.clear();
+        int length = channel.read(temporary);
+        temporary.flip();
+
+        if(length != 4) {
+            // Less than 4 bytes were sent or more data than requested was sent
+            System.out.println("Error: Wrong number of bytes sent (was " + length + ")");
+
+            channel.close();
+            return false;
+        }
+
+        int response = temporary.getInt();
 
         if ((response & PCKTID_HEADER) != PCKTID_HEADER) {
             // Got garbage data, ignore
+            System.out.println("Error: Valid packet not received (was " + response + ")");
+
+            channel.close();
             return false;
         }
         else if ((response & 0xFF) != PCKTID_ACK) {
             // Proper response wasn't given
+            System.out.println("Error: Wrong response received (was " + (response & 0xFF) + ")");
+
+            channel.close();
             return false;
         }
 
@@ -53,28 +69,42 @@ public class RemoteConnection {
      * @throws IOException
      */
     public void disconnect () throws IOException {
-        byte[] data = new byte[4];
-        StreamSerializer.appendInt(data, 0, PCKTID_HEADER | PCKTID_DISCONNECT_NOTIFY);
-        out.write(data);
+        // No need to send the notify onto a dead connection
+        if (!channel.isConnected())
+            return;
 
-        out.flush();
+        ByteBuffer temporary = ByteBuffer.allocate(4);
 
-        try {
-            Thread.sleep(500);
-        }
-        catch (InterruptedException e) {
-            e.printStackTrace();
-        }
+        // Construct the packet
+        temporary.putInt(PCKTID_HEADER | PCKTID_DISCONNECT_NOTIFY);
+        temporary.flip();
 
-        out.close();
-        in.close();
-        socket.shutdownInput();
-        socket.shutdownOutput();
-        socket.close();
+        // Send the disconnect notify
+        channel.write(temporary);
+
+        // Close up shop
+        channel.close();
     }
 
-    public void write(byte[] packet_buffer, int offset, int size) throws IOException {
-        out.write(packet_buffer, offset, size);
-        out.flush();
+    /**
+     * Puts the data given onto the network
+     * The given buffer should already be flipped for reading
+     *
+     * @param data The data to send over
+     * @throws IOException
+     */
+    public void write(ByteBuffer data) throws IOException {
+        channel.write(data);
+    }
+
+    /**
+     * Receives data from the network
+     * The given buffer should already be cleared for writting
+     *
+     * @param data The destination for the received data
+     * @throws IOException
+     */
+    public void read(ByteBuffer data) throws IOException {
+        channel.read(data);
     }
 }
