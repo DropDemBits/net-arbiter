@@ -162,7 +162,6 @@ public class TestArbiter {
                             while (totalBytes < payloadSize) {
                                 packet.compact();
                                 int bytes = arbiter.read(packet);
-                                packet.flip();
 
                                 if (bytes == 0)
                                     continue;
@@ -175,6 +174,8 @@ public class TestArbiter {
                                 // Add on to total
                                 totalBytes += bytes;
                             }
+
+                            packet.flip();
 
                             if (!isRunning)
                                 break;

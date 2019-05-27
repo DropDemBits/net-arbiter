@@ -142,6 +142,35 @@ public class NetArbiter {
         }
     }
 
+    private void checkAndFetchMoreBytes(SocketChannel endpoint, ByteBuffer packetData, int amount) throws IOException {
+        if (packetData.remaining() >= amount)
+            return;
+
+        // Need to read in more bytes
+        System.out.println("Getting more bytes");
+
+        // Read in the rest of the data
+        int totalBytes = packetData.remaining();
+
+        while (totalBytes < amount) {
+            packetData.compact();
+            int bytes = endpoint.read(packetData);
+
+            if (bytes == 0)
+                continue;
+
+            if (bytes == -1) {
+                isRunning = false;
+                break;
+            }
+
+            // Add on to total
+            totalBytes += bytes;
+        }
+
+        packetData.flip();
+    }
+
     /**
      * Parses the command data and sends an appropriate response
      *
@@ -150,6 +179,9 @@ public class NetArbiter {
      * @param length The original read length
      */
     private void parseCommand(SocketChannel endpoint, ByteBuffer packetData, int length) throws IOException {
+        // Mark the start of the data
+        packetData.mark();
+
         ByteBuffer response = ByteBuffer.allocate(16);
         int id = packetData.getInt();
 
@@ -236,7 +268,7 @@ public class NetArbiter {
         } else {
             // Sending data over to a remote arbiter
             int connID;
-            packetData.rewind();
+            packetData.reset();
 
             // Reparse the connection ID
             connID = parseInt(packetData, 2);
@@ -263,18 +295,19 @@ public class NetArbiter {
             // Format: [connID : 2][size : 2][payload] (connID taken care of)
             short payloadSize = (short) parseInt(packetData, 2);
 
+            checkAndFetchMoreBytes (endpoint, packetData, payloadSize);
+
             // Copy payload data into another byte buffer
             ByteBuffer payload = ByteBuffer.allocate(payloadSize + Short.BYTES);
 
             // Build the remote payload
             payload.clear();
-            System.out.println(payload.toString());
-
             payload.putShort(payloadSize);
             payload.put(packetData.array(), packetData.position(), payloadSize);
             payload.flip();
 
-            packetData.position(packetData.arrayOffset() + payloadSize);
+            // Skip over the payload data
+            packetData.position(packetData.position() + payloadSize);
 
             RemoteConnection connection = outboundConnections.get(connID);
             connection.write(payload);
@@ -338,7 +371,7 @@ public class NetArbiter {
                     break;
                 }
 
-                if (length > 0)
+                while (packetData.hasRemaining())
                     parseCommand (endpoint, packetData, length);
 
                 // Check for data from remote sources
