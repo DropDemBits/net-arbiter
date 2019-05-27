@@ -4,8 +4,8 @@ public class Constants {
 
     // Packet IDs
     public static final int PCKTID_HEADER = 'a' << 24 | 'r' << 16 | 'b' << 8;
-    public static final int PCKTID_CONNECT_ESTABLISH = 1;
-    public static final int PCKTID_ACK = 2;
+    public static final int PCKTID_CONNECT_ESTABLISH = 0;
+    public static final int PCKTID_ACK = 1;
     public static final int PCKTID_DISCONNECT_NOTIFY = 2;
 
     // Arbiter Commands

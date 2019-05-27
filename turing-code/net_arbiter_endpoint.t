@@ -4,6 +4,7 @@
 const ARBITER_PORT : int := 7007
 const EXIT := 'arb:X'
 const CONNECT := 'arb:C'
+const DISCONNECT := 'arb:D'
 
 const ESTABLISHED := 'arb:E'
 const NEW_CONNECT := 'arb:N'
@@ -153,6 +154,13 @@ if resp not= 0 then
 end if
 
 % Disconnect from remote
+put "Disconnecting from connection #", conId
+conSend := ""
+conSend += DISCONNECT
+conSend += toNetInt(conId, 2)
+write : netSock, conSend : length(conSend)
+
+% Close the arbiter
 put "Sending connection exit"
 
 conSend := ""

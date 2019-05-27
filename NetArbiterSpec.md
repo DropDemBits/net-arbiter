@@ -15,9 +15,8 @@ netFD := WaitForConnection(port : int, var address)
   - Server mode
   - Packet passthrough
   
-# Interface
-- Control ```[command id];[payload]```
-- Passthrough ```"P;[payload]"```
+# Notes:
+Remote inbound and outbound connection ids are shared
 
 # Protocols
 ## Arbiter  - Arbiter
@@ -39,6 +38,8 @@ Ack (Establish):
 ```arb1```
 Disconnect Notify:
 ```arb2```
+Data Receive:
+```[size : 2][payload]```
 
 ## Endpoint - Arbiter
 Exit:
