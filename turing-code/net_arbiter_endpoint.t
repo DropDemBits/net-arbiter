@@ -52,7 +52,7 @@ fcn readPacket () : nat4
     % Check if there's actually any data
     if Net.BytesAvailable(netSock) <= 0 then
         % No data to read, silently return
-        result cheat(nat4, -1)
+        result cheat(nat4, 0)
     end if
 
     % Check packet id
@@ -83,17 +83,49 @@ fcn readPacket () : nat4
             put "Remote connection closed on #", param
         label 'W':
             put "Error #", param
+            param *= -1
         label 'S':
             put "Data successfully sent"
         end case
         
         % Return the parameter
         result param
+    else
+        % Read in the recieved data
+        var data : string
+        var connID, payloadSize : nat4
+        var payload : flexible array 0 .. -1 of nat1
+        
+        % packet_id already contains the connId
+        connID := parseInt (packet_id, 2)
+        
+        % Read in payload size
+        read : netSock, data : 4
+        payloadSize := parseInt (data, 2) - 1
+        
+        if payloadSize < 0 then
+            result 0
+        end if
+        
+        put "Received data from #", connID, " (size ", payloadSize + 1, "B, a ", Net.BytesAvailable(netSock), "): "..
+        new payload, payloadSize
+        
+        for i : 0 .. payloadSize
+            put "w" ..
+            read : netSock, payload (i) : 1
+        end for
+        
+        put ""
+        
+        for i : 0 .. payloadSize
+            put chr(payload (i))..
+        end for
+        
+        put ""
+        result payloadSize + 1
     end if
     
-    put ""
-    
-    result cheat(nat4, -1)
+    result cheat(nat4, 0)
 end readPacket
 
 put "Opening connection with arbiter"
@@ -149,8 +181,20 @@ end loop
 put Net.BytesAvailable(netSock)
 var resp : nat4 := readPacket()
 
-if resp not= 0 then
+if resp < 0 then
     put "Error in sending data: ", resp
+end if
+
+put "Getting echo'd data..."
+loop
+    exit when Net.BytesAvailable(netSock) > 0
+end loop
+
+put Net.BytesAvailable(netSock)
+resp := readPacket()
+
+if resp < 0 then
+    put "Error in data reception: ", resp
 end if
 
 % Disconnect from remote

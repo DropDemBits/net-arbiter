@@ -3,12 +3,11 @@ package ddb.io.netarbiter;
 import java.io.*;
 import java.net.*;
 import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.PriorityQueue;
-import java.util.Queue;
+import java.util.*;
 
 import static ddb.io.netarbiter.Constants.*;
 
@@ -40,20 +39,18 @@ public class NetArbiter {
     private boolean isRunning = true;
     private int endpointPort, listenPort;
 
-    private Queue<Integer> outboundFreeSlots;
-    private boolean outboundHasFreeSlot = false;
+    private Queue<Integer> freeConnectionIDs;
+    private boolean connectionIdAvailable = false;
 
-    private List<RemoteConnection> outboundConnections;
-    private List<RemoteConnection> inboundConnections;
+    private List<SocketChannel> remoteConnections;
+    private Selector remoteChannels;
 
     private NetArbiter(int endpoint, int listen) {
         this.endpointPort = endpoint;
         this.listenPort = listen;
 
-        outboundConnections = new ArrayList<> ();
-        inboundConnections = new ArrayList<> ();
-
-        outboundFreeSlots = new PriorityQueue<>();
+        remoteConnections = new ArrayList<> ();
+        freeConnectionIDs = new PriorityQueue<>();
     }
 
     // TODO: Convert over to ZBE
@@ -109,39 +106,6 @@ public class NetArbiter {
         return output.toString();
     }
 
-
-    private int tryConnectingTo(String address, int remotePort) {
-        System.out.println("Connecting to " + address + ":" + remotePort);
-
-        try {
-            // Try connecting to the remote arbiter
-            SocketChannel remoteSocket = SocketChannel.open(new InetSocketAddress(address, remotePort));
-            RemoteConnection connection = new RemoteConnection(remoteSocket);
-
-            // Establish the connection
-            // Return -1 on failure
-            if (!connection.establish ())
-                return -1;
-
-            int connID;
-
-            if (outboundHasFreeSlot && !outboundFreeSlots.isEmpty()) {
-                // Use a recently-used slot
-                connID = outboundFreeSlots.poll();
-                outboundConnections.set(connID, connection);
-            } else {
-                // Add connection to the list of remotes
-                connID = outboundConnections.size();
-                outboundConnections.add(connection);
-            }
-
-            return connID;
-        } catch (IOException e) {
-            e.printStackTrace();
-            return -1;
-        }
-    }
-
     private void checkAndFetchMoreBytes(SocketChannel endpoint, ByteBuffer packetData, int amount) throws IOException {
         if (packetData.remaining() >= amount)
             return;
@@ -172,17 +136,97 @@ public class NetArbiter {
     }
 
     /**
+     * Sends over the appropriate packets in order to establish a connection
+     *
+     * @param remote The remote connection to establish
+     * @return true if the connection was successfully established
+     */
+    private boolean establishConnection(SocketChannel remote) throws IOException {
+        ByteBuffer temporary = ByteBuffer.allocate(8);
+        temporary.putInt(PCKTID_HEADER | PCKTID_CONNECT_ESTABLISH);
+
+        // Send connection establish
+        temporary.flip();
+        remote.write(temporary);
+
+        // Listen for the response
+        temporary.clear();
+        int length = remote.read(temporary);
+        temporary.flip();
+
+        if(length != 4) {
+            // Less than 4 bytes were sent or more data than requested was sent
+            System.out.println("Error: Wrong number of bytes sent (was " + length + ")");
+
+            remote.close();
+            return false;
+        }
+
+        int response = temporary.getInt();
+
+        if (response != (PCKTID_HEADER | PCKTID_ACK)) {
+            // Proper response wasn't given
+            System.out.println("Error: Wrong response received (was " + (response & ~0xFF) + ", " + (response & 0xFF) + ")");
+
+            remote.close();
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Sends a response to the given endpoint
+     *
+     * @param endpoint The endpoint to send the response to
+     * @param type The type of response to send
+     * @param parameter The parameter to send back
+     * @throws IOException
+     */
+    private void sendResponse (SocketChannel endpoint, byte type, int parameter) throws IOException {
+        ByteBuffer response = ByteBuffer.allocate(9);
+        response.clear();
+
+        response.putInt(ARB_HEADER);
+        response.put(type);
+
+        // "Success sent" is the only response without a parameter
+        if (type != ARB_REP_SUCCESS_SENT)
+            response.put(toNetInt(parameter, 2).getBytes());
+
+        response.flip();
+        endpoint.write(response);
+    }
+
+    /**
+     * Checks the given id and sends the appropriate response
+     *
+     * @param endpoint The endpoint to send the response to
+     * @param connID The connection id to verify
+     * @return true if the id is valid
+     * @throws IOException
+     */
+    private boolean checkId (SocketChannel endpoint, int connID) throws IOException {
+        if (connID < 0 || connID >= remoteConnections.size()) {
+            // Invalid connection ID
+            System.out.println("Error: Invalid connection id for send (was " + connID + ")");
+            sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_INVALID_ID);
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * Parses the command data and sends an appropriate response
      *
      * @param endpoint The endpoint to send data to
      * @param packetData The packet data to parse.
-     * @param length The original read length
      */
-    private void parseCommand(SocketChannel endpoint, ByteBuffer packetData, int length) throws IOException {
-        // Mark the start of the data
+    private void parseCommand(SocketChannel endpoint, ByteBuffer packetData) throws IOException {
+        // Mark the start of the data (so that the data parser can parse the data)
         packetData.mark();
 
-        ByteBuffer response = ByteBuffer.allocate(16);
         int id = packetData.getInt();
 
         if (id == ARB_HEADER) {
@@ -205,28 +249,45 @@ public class NetArbiter {
                     host = copyString(packetData);
 
                     System.out.println("Connecting to remote arbiter at " + host + ":" + port);
-                    int connID = tryConnectingTo(host, port);
+                    int connID;
 
-                    // Build response
-                    response.clear();
+                    try {
+                        System.out.println("Connecting to " + host + ":" + port);
 
-                    if (connID != -1) {
+                        // Try connecting to the remote arbiter
+                        SocketChannel remoteSocket = SocketChannel.open(new InetSocketAddress(host, port));
+
+                        // Establish the connection
+                        if (!establishConnection (remoteSocket)) {
+                            System.out.println("Error: Connection Failed");
+                            sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_CONNECTION_FAILED);
+                            break;
+                        }
+
+                        if (connectionIdAvailable) {
+                            // Use a recently-used slot
+                            connID = freeConnectionIDs.poll();
+                            remoteConnections.set(connID, remoteSocket);
+                            connectionIdAvailable = !freeConnectionIDs.isEmpty();
+                        } else {
+                            // Add connection to the list of remotes
+                            connID = remoteConnections.size();
+                            remoteConnections.add(remoteSocket);
+                        }
+
+                        // Add Socket to the list of remote sockets
+                        remoteSocket.configureBlocking(false);
+                        remoteSocket.register(remoteChannels, SelectionKey.OP_READ, connID);
+
                         System.out.println("Connection Successful");
-
-                        response.putInt(ARB_HEADER);
-                        response.put(ARB_REP_ESTABLISH);
-                        response.put(toNetInt(0, 2).getBytes());
-                    } else {
+                        sendResponse (endpoint, ARB_REP_ESTABLISH, connID);
+                        break;
+                    } catch (IOException e) {
+                        e.printStackTrace();
                         System.out.println("Error: Connection Failed");
-
-                        response.putInt(ARB_HEADER);
-                        response.put(ARB_REP_ERROR);
-                        response.put(toNetInt(ARB_ERR_CONNECTION_FAILED, 2).getBytes());
+                        sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_CONNECTION_FAILED);
+                        break;
                     }
-
-                    response.flip();
-                    endpoint.write(response);
-                    break;
                 }
                 case ARB_CMD_DISCONNECT: {
                     // Disconnect from remote
@@ -235,31 +296,29 @@ public class NetArbiter {
                     // Format: [connID : 2]
                     connID = parseInt(packetData, 2);
 
-                    if (connID < 0 || connID >= outboundConnections.size()) {
+                    if (connID < 0 || connID >= remoteConnections.size()) {
                         // Invalid connection ID
                         System.out.println("Error: Invalid connection id for disconnect (was " + connID + ")");
-
-                        response.clear();
-
-                        response.putInt(ARB_HEADER);
-                        response.put(ARB_REP_ERROR);
-                        response.put(toNetInt(ARB_ERR_INVALID_ID, 2).getBytes());
-
-                        response.flip();
-                        endpoint.write(response);
-
+                        sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_INVALID_ID);
                         break;
                     }
 
                     System.out.println("Disconnecting from remote arbiter connection #" + connID);
 
-                    RemoteConnection connection = outboundConnections.get(connID);
-                    connection.disconnect();
-                    outboundConnections.set (connID, null);
+                    // Send the disconnect notify and close up shop
+                    SocketChannel connection = remoteConnections.get(connID);
+                    ByteBuffer message = ByteBuffer.allocate(4);
 
-                    outboundHasFreeSlot = true;
-                    outboundFreeSlots.add(connID);
+                    // Construct the packet & send it
+                    message.putInt(PCKTID_HEADER | PCKTID_DISCONNECT_NOTIFY);
+                    message.flip();
+                    connection.write(message);
+                    connection.close();
 
+                    // Add the connection id to the available list of ids
+                    remoteConnections.set (connID, null);
+                    connectionIdAvailable = true;
+                    freeConnectionIDs.add(connID);
                     break;
                 }
                 default:
@@ -276,24 +335,11 @@ public class NetArbiter {
             System.out.println("Sending data to remote arbiter #" + connID);
 
             // Check the id
-            if (connID < 0 || connID >= outboundConnections.size()) {
-                // Invalid connection ID
-                System.out.println("Error: Invalid connection id for send (was " + connID + ")");
-
-                response.clear();
-
-                response.putInt(ARB_HEADER);
-                response.put(ARB_REP_ERROR);
-                response.put(toNetInt(ARB_ERR_INVALID_ID, 2).getBytes());
-
-                response.flip();
-                endpoint.write(response);
-
+            if (!checkId (endpoint, connID))
                 return;
-            }
 
             // Format: [connID : 2][size : 2][payload] (connID taken care of)
-            short payloadSize = (short) parseInt(packetData, 2);
+            int payloadSize = parseInt(packetData, 2);
 
             checkAndFetchMoreBytes (endpoint, packetData, payloadSize);
 
@@ -302,26 +348,20 @@ public class NetArbiter {
 
             // Build the remote payload
             payload.clear();
-            payload.putShort(payloadSize);
+            payload.putShort((short) payloadSize);
             payload.put(packetData.array(), packetData.position(), payloadSize);
             payload.flip();
 
             // Skip over the payload data
             packetData.position(packetData.position() + payloadSize);
 
-            RemoteConnection connection = outboundConnections.get(connID);
+            SocketChannel connection = remoteConnections.get(connID);
             connection.write(payload);
 
             System.out.println("Successfully sent payload over");
 
             // Send back status
-            response.clear();
-
-            response.putInt(ARB_HEADER);
-            response.put(ARB_REP_SUCCESS_SENT);
-
-            response.flip();
-            endpoint.write(response);
+            sendResponse(endpoint, ARB_REP_SUCCESS_SENT, 0);
         }
     }
 
@@ -354,6 +394,11 @@ public class NetArbiter {
             return;
 
         // TODO: Setup Remote Connection Listener
+        try {
+            remoteChannels = Selector.open();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
 
         // State: Endpoint connected, Endpoint Listener closed
         ByteBuffer packetData = ByteBuffer.allocate(1024);
@@ -367,17 +412,57 @@ public class NetArbiter {
                 int length = endpoint.read(packetData);
                 packetData.flip();
 
-                if (length == -1) {
+                if (length == -1)
                     break;
-                }
 
                 while (packetData.hasRemaining())
-                    parseCommand (endpoint, packetData, length);
+                    parseCommand (endpoint, packetData);
 
                 // Check for data from remote sources
+                int numReady = remoteChannels.selectNow();
+
+                if (numReady > 0) {
+                    Set<SelectionKey> keys = remoteChannels.selectedKeys();
+                    Iterator<SelectionKey> iterator = keys.iterator();
+
+                    while (iterator.hasNext()) {
+                        SelectionKey key = iterator.next();
+
+                        if (key.isReadable()) {
+                            // Readable channel has been given, send to the endpoint
+
+                            SocketChannel remote = (SocketChannel) key.channel();
+
+                            packetData.clear();
+                            remote.read(packetData);
+                            packetData.flip();
+
+                            // Get payload size
+                            int payloadSize = packetData.getShort();
+
+                            // Send the received packet to the endpoint
+                            // 4 bytes for connection id, 4 bytes for payload size (8 total)
+                            ByteBuffer payload = ByteBuffer.allocate(payloadSize + 8);
+                            payload.put(toNetInt( (int)key.attachment(), 2).getBytes());
+                            payload.put(toNetInt( payloadSize, 2).getBytes());
+                            payload.put(packetData.array(), packetData.position(), payloadSize);
+
+                            payload.flip();
+                            endpoint.write(payload);
+
+                            packetData.position(packetData.position() + payloadSize);
+
+                            if (packetData.hasRemaining())
+                                System.out.println("Warning: More data received than expected, discarding");
+                        }
+
+                        iterator.remove();
+                    }
+                }
             }
 
             // Gracefully close connection with endpoint
+            remoteChannels.close();
             endpoint.close();
         } catch (IOException e) {
             e.printStackTrace();

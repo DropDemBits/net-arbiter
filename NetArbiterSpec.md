@@ -68,11 +68,11 @@ New Connection (D -> ES)
 Connection Closed by Remote
 ```arb:R[connID : 2]``` 
 
-Data Sent Successfully:
-```arb:S```
-
 Error:
 ```arb:W[errorCode : 2]```
+
+Data Sent Successfully:
+```arb:S```
 
 Data Receive:
 ```[connID : 2][size : 2][payload]```
