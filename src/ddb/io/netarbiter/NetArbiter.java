@@ -13,24 +13,21 @@ import static ddb.io.netarbiter.Constants.*;
 
 /**
  * Network Arbiter for Turing Programs
- * Provides a versatile networking interface than the Turing Net Module.
+ * Provides a simple networking interface to work around some of the bugs
+ * inside of the Turing Net Module.
  *
  * Communication between the arbiter and the program is done via a TCP/IP
  * connection established in the Turing program.
  *
  * TODO:
- * - Program - Arbiter connection (local machine connection)
- * - Arbiter - Arbiter connection (remote machine connection)
- * - Local Program connection (passthrough)
- * - Arbiter command set (controlling the arbiter connection)
- *  - Close arbiter connection
- *  - Wait for remote connection
- *  - Open remote connection
- *  - Close remote connection
- *  - BIO send & receive
- *  - AIO send & receive
- * - Handle remote attacks?
- *  - Prevent remote connection from sending "Close arbiter connection"
+ * V Program - Arbiter connection (local machine connection)
+ * V Arbiter - Arbiter connection (remote machine connection)
+ * - Local Program connection (passthrough / multiple endpoints)
+ * V Arbiter command set (controlling the arbiter connection)
+ *  V Close arbiter connection (Exit)
+ *  V Open remote connection   (Connect)
+ *  V Close remote connection  (Disconnect)
+ *  V Send & receive data      (Data packets)
  */
 public class NetArbiter {
 
@@ -368,6 +365,8 @@ public class NetArbiter {
     /**
      * Begins the endpoint-side arbiter
      * - Waits for a connection from the program
+     * - Parses the given commands
+     * - Reads in data from remote connections
      */
     private void startEndpoint() {
         // Setup the endpoint listener & wait for an endpoint
@@ -471,6 +470,132 @@ public class NetArbiter {
         // State: Endpoint disconnected
     }
 
+    /**
+     * Begins the simple server listener
+     * To be merged into the "startEndpoint" method
+     */
+    private void startListener() {
+        System.out.println("Waiting for a connection from the client");
+
+        // Setup the server channel
+        ServerSocketChannel listener = null;
+
+        try {
+            listener = ServerSocketChannel.open();
+            listener.bind(new InetSocketAddress(listenPort));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        if (listener == null)
+            return;
+
+        System.out.println("Waiting for connections");
+
+        try {
+            SocketChannel arbiter = listener.accept();
+            arbiter.configureBlocking(false);
+
+            ByteBuffer packet = ByteBuffer.allocate(1024);
+            boolean isRunning = true;
+
+            System.out.println("Connection accepted");
+
+            while (isRunning) {
+                // Read in data
+                packet.clear();
+                int length = arbiter.read(packet);
+                packet.flip();
+
+                if (length == -1) {
+                    System.out.println("End of channel");
+                    arbiter.close();
+                    break;
+                }
+
+                if (length == 0)
+                    continue;
+
+                while (packet.hasRemaining()) {
+                    // Get the packet id
+                    packet.mark();
+
+                    int packetID = packet.getInt();
+
+                    if ((packetID & PCKTID_HEADER) == PCKTID_HEADER) {
+                        switch (packetID & 0xFF) {
+                            case PCKTID_CONNECT_ESTABLISH:
+                                System.out.println("Connection requested from client");
+
+                                // Send an ack for the connection request
+                                packet.clear();
+                                packet.putInt(PCKTID_HEADER | PCKTID_ACK);
+                                packet.flip();
+
+                                arbiter.write(packet);
+                                break;
+                            case PCKTID_DISCONNECT_NOTIFY:
+                                System.out.println("Disconnect from client");
+                                isRunning = false;
+                                break;
+                            default:
+                                System.out.println("Invalid interconnect id: " + Integer.toHexString(packetID & 0xFF));
+                                break;
+                        }
+                    } else {
+                        System.out.println("Data Received:");
+
+                        // Print out data
+                        packet.reset();
+
+                        short payloadSize = packet.getShort();
+
+                        if (payloadSize > packet.capacity()) {
+                            System.out.println("Warning: Payload too big!");
+                            continue;
+                        } else if (payloadSize > packet.limit()) {
+                            System.out.println("Getting more bytes");
+
+                            // Read in the rest of the data
+                            int totalBytes = packet.remaining();
+
+                            while (totalBytes < payloadSize) {
+                                packet.compact();
+                                int bytes = arbiter.read(packet);
+
+                                if (bytes == 0)
+                                    continue;
+
+                                if (bytes == -1) {
+                                    isRunning = false;
+                                    break;
+                                }
+
+                                // Add on to total
+                                totalBytes += bytes;
+                            }
+
+                            packet.flip();
+
+                            if (!isRunning)
+                                break;
+                        }
+
+                        for (int i = 0; i < payloadSize; i++)
+                            System.out.print((char) packet.get());
+                        System.out.println();
+
+                        // Send the data back
+                        packet.reset();
+                        arbiter.write(packet);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
 
     private static boolean parseArgs(String[] args, int[] ports) {
         int connectionPort = -1, listenPort = -1;
@@ -534,7 +659,11 @@ public class NetArbiter {
 
         // Launch the arbiter
         NetArbiter arbiter = new NetArbiter(ports[0], ports[1]);
-        arbiter.startEndpoint();
+
+        if (ports[1] != -1)
+            arbiter.startListener();
+        else
+            arbiter.startEndpoint();
     }
 
 }

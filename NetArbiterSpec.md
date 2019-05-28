@@ -11,8 +11,8 @@ netFD := WaitForConnection(port : int, var address)
 
 # Milestones
 - Simple Chat Client
-  - Client mode
-  - Server mode
+  - Client commands
+  - Accept new connections
   - Packet passthrough
   
 # Notes:
@@ -80,6 +80,8 @@ Data Receive:
 ### Defined Commands:
 
 | ID (char) | Name | Payload | Description |
-|-----------|------|---------|-------------|
-| 0x45('C') | CONNECT | ```[port : 2][address : lstring]``` | Establishes a connection to a remote arbiter |
-|    N/A    | SEND_DATA | ```[connID : 2][size : 2][payload]``` | Sends the given data to a remote arbiter |
+|-----------|------------|---------------------------------------|------------------------------------------------------|
+| 0x45('C') | CONNECT    | ```[port : 2][address : lstring]```   | Establishes a connection to a remote arbiter         |
+| 0x45('D') | DISCONNECT | ```[connID : 2]```                    | Disconnects from the specified remote arbiter        |
+| 0x45('X') | EXIT       | N/A                                   | Stops communication between the arbiter and endpoint |
+|    N/A    | SEND_DATA  | ```[connID : 2][size : 2][payload]``` | Sends the given data to a remote arbiter             |

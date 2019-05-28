@@ -145,7 +145,7 @@ put "Sending opening connection"
 var port : nat4
 var address : string
 
-port := 8080
+port := 8087
 address := "localhost"
 
 conSend := ""
