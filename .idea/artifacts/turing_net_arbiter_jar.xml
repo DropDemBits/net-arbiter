@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="turing-net-arbiter:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/turing_net_arbiter_jar</output-path>
+    <root id="archive" name="net-arbiter.jar">
+      <element id="module-output" name="turing-net-arbiter" />
+    </root>
+  </artifact>
+</component>

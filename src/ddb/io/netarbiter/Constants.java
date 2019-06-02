@@ -23,7 +23,7 @@ public class Constants {
     // Arbiter Errors
     public static final short ARB_ERR_NONE = 0;
     public static final short ARB_ERR_CONNECTION_FAILED = 1;
-    public static final short ARB_ERR_INVALID_ID = 2;
+    public static final short ARB_ERR_INVALID_ARG = 2;
 
     // Only for constant declarations
     private Constants() {}

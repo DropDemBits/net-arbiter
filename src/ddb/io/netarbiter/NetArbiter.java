@@ -3,10 +3,7 @@ package ddb.io.netarbiter;
 import java.io.*;
 import java.net.*;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.*;
 import java.util.*;
 
 import static ddb.io.netarbiter.Constants.*;
@@ -207,7 +204,7 @@ public class NetArbiter {
         if (connID < 0 || connID >= remoteConnections.size()) {
             // Invalid connection ID
             System.out.println("Error: Invalid connection id for send (was " + connID + ")");
-            sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_INVALID_ID);
+            sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_INVALID_ARG);
             return false;
         }
 
@@ -279,10 +276,19 @@ public class NetArbiter {
                         System.out.println("Connection Successful");
                         sendResponse (endpoint, ARB_REP_ESTABLISH, connID);
                         break;
-                    } catch (IOException e) {
-                        e.printStackTrace();
+                    } catch (ConnectException e) {
+                        // Handle a connection failure
                         System.out.println("Error: Connection Failed");
                         sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_CONNECTION_FAILED);
+                        break;
+                    } catch (UnresolvedAddressException e) {
+                        // Handle a bad host address
+                        System.out.println("Error: Bad host address (was " + host + ")");
+                        sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_INVALID_ARG);
+                        break;
+                    } catch (IOException e) {
+                        // Unknown case
+                        e.printStackTrace();
                         break;
                     }
                 }
@@ -296,7 +302,7 @@ public class NetArbiter {
                     if (connID < 0 || connID >= remoteConnections.size()) {
                         // Invalid connection ID
                         System.out.println("Error: Invalid connection id for disconnect (was " + connID + ")");
-                        sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_INVALID_ID);
+                        sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_INVALID_ARG);
                         break;
                     }
 
@@ -329,7 +335,7 @@ public class NetArbiter {
             // Reparse the connection ID
             connID = parseInt(packetData, 2);
 
-            System.out.println("Sending data to remote arbiter #" + connID);
+            //System.out.println("Sending data to remote arbiter #" + connID);
 
             // Check the id
             if (!checkId (endpoint, connID))
@@ -355,7 +361,7 @@ public class NetArbiter {
             SocketChannel connection = remoteConnections.get(connID);
             connection.write(payload);
 
-            System.out.println("Successfully sent payload over");
+            //System.out.println("Successfully sent payload over");
 
             // Send back status
             sendResponse(endpoint, ARB_REP_SUCCESS_SENT, 0);
@@ -436,20 +442,22 @@ public class NetArbiter {
                             remote.read(packetData);
                             packetData.flip();
 
-                            // Get payload size
-                            int payloadSize = packetData.getShort();
+                            while (packetData.hasRemaining()) {
+                                // Get payload size
+                                int payloadSize = packetData.getShort();
 
-                            // Send the received packet to the endpoint
-                            // 4 bytes for connection id, 4 bytes for payload size (8 total)
-                            ByteBuffer payload = ByteBuffer.allocate(payloadSize + 8);
-                            payload.put(toNetInt( (int)key.attachment(), 2).getBytes());
-                            payload.put(toNetInt( payloadSize, 2).getBytes());
-                            payload.put(packetData.array(), packetData.position(), payloadSize);
+                                // Send the received packet to the endpoint
+                                // 4 bytes for connection id, 4 bytes for payload size (8 total)
+                                ByteBuffer payload = ByteBuffer.allocate(payloadSize + 8);
+                                payload.put(toNetInt( (int)key.attachment(), 2).getBytes());
+                                payload.put(toNetInt( payloadSize, 2).getBytes());
+                                payload.put(packetData.array(), packetData.position(), payloadSize);
 
-                            payload.flip();
-                            endpoint.write(payload);
+                                payload.flip();
+                                endpoint.write(payload);
 
-                            packetData.position(packetData.position() + payloadSize);
+                                packetData.position(packetData.position() + payloadSize);
+                            }
 
                             if (packetData.hasRemaining())
                                 System.out.println("Warning: More data received than expected, discarding");
@@ -501,6 +509,7 @@ public class NetArbiter {
 
             System.out.println("Connection accepted");
 
+            //int sequence = 0;
             while (isRunning) {
                 // Read in data
                 packet.clear();
@@ -543,7 +552,7 @@ public class NetArbiter {
                                 break;
                         }
                     } else {
-                        System.out.println("Data Received:");
+                        //System.out.println("Data Received:");
 
                         // Print out data
                         packet.reset();
@@ -581,9 +590,10 @@ public class NetArbiter {
                                 break;
                         }
 
+                        /*System.out.print (++sequence);
                         for (int i = 0; i < payloadSize; i++)
                             System.out.print((char) packet.get());
-                        System.out.println();
+                        System.out.println();*/
 
                         // Send the data back
                         packet.reset();
