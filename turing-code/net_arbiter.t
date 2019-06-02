@@ -481,6 +481,22 @@ module pervasive NetArbiter
                 return
             end if
             
+            % Cleanup any remaining packets
+            var nextPacket : ^Packet := pendingPackets
+            
+            loop
+                exit when nextPacket = nil
+                
+                % Advance to the next packet & free the current one
+                var packet : ^Packet := nextPacket
+                nextPacket := nextPacket -> next
+                free packet
+            end loop
+            
+            % Empty the list
+            pendingPackets := nil
+            pendingPacketsTail := nil
+
             % Command format: X
             % Send the stop command
             const arbStop : nat1 := ord ('X')

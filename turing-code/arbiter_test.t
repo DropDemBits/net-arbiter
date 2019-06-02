@@ -2,6 +2,37 @@
 % Tests the functions of the arbiter
 import NetArbiter in "net_arbiter.t"
 
+%%% Types & Classes %%%
+monitor class mutex
+    export acquire, canAcquire, release
+    
+    var canLock : boolean := true
+    var waitingQueue : condition
+    
+    proc acquire ()
+        if not canLock then
+            wait waitingQueue
+        end if
+        
+        % Only 1 process can acquire the lock at a time
+        canLock := false
+    end acquire
+    
+    fcn canAcquire () : boolean
+        result canLock
+    end canAcquire
+    
+    proc release ()
+        assert not canLock
+        
+        % Release the lock
+        canLock := true
+        
+        % Wake whoever is in the waiting queue
+        signal waitingQueue
+    end release
+end mutex
+
 
 %%% Utilities %%%
 proc cleanUp (var arbiter : ^ Arbiter)
@@ -12,14 +43,26 @@ end cleanUp
 
 
 %%% Main Code %%%
-proc EndpointTest ()
+var shouldRun : boolean := true
+
+var basePort : int := 7007
+var portLock : ^mutex
+
+process EndpointTest ()
+    var ourPort : int
     var connID : int4 := 0
     var arb : ^ Arbiter
     
     new Arbiter, arb
     
+    % Get usage port
+    portLock -> acquire ()
+    ourPort := basePort
+    basePort += 1
+    portLock -> release ()
+    
     put "Starting arbiter"
-    arb -> startup (7007, 0)
+    arb -> startup (ourPort, 0)
     if arb -> getError () not= 0 then
         put "Error occured (", NetArbiter.errorToString (arb -> getError ()), ")"
         cleanUp (arb)
@@ -48,13 +91,11 @@ proc EndpointTest ()
         data (i) := ord (TEST_STRING (i))
     end for
     
-    Input.Flush ()
     loop
-        exit when Input.hasch ()
+        exit when not shouldRun
         
-        for i : 1 .. 100
-            len := arb -> writePacket (connID, data)
-        end for
+        len := arb -> writePacket (connID, data)
+        len := arb -> writePacket (connID, data)
         
         %% Receive the echo'd data %%
         var recvStart : int := Time.Elapsed
@@ -65,10 +106,10 @@ proc EndpointTest ()
         
         loop
             var recentPacket : ^Packet := arb -> getPacket ()
-            exit when recentPacket = nil
+            exit when recentPacket = nil or not shouldRun
             
             % Put the data onto the screen
-            /*
+            put ourPort - 7007, " " ..
             put recentPacket -> connID, " "..
             put recentPacket -> size, " "..
             
@@ -76,12 +117,11 @@ proc EndpointTest ()
                 put char @ (recentPacket -> bytes + i) ..
             end for
             put ""
-            */
             
             exit when not arb -> nextPacket ()
         end loop
+        
     end loop
-    Input.Flush ()
     
     %% Disconnect %%
     put "Disconnecting remote arbiter #", connID
@@ -91,4 +131,16 @@ proc EndpointTest ()
 end EndpointTest
 
 
-EndpointTest ()
+new portLock
+
+for i : 1 .. 2
+    fork EndpointTest ()
+end for
+
+loop
+    exit when not shouldRun
+    shouldRun := not Input.hasch ()
+    Input.Flush ()
+end loop
+
+free portLock

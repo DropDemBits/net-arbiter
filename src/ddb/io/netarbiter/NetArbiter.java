@@ -19,16 +19,19 @@ import static ddb.io.netarbiter.Constants.*;
  * TODO:
  * V Program - Arbiter connection (local machine connection)
  * V Arbiter - Arbiter connection (remote machine connection)
- * - Local Program connection (passthrough / multiple endpoints)
+ * X Local Program connection (passthrough / multiple endpoints)
+ *  \ Will just have to pass through a few arbiters
  * V Arbiter command set (controlling the arbiter connection)
  *  V Close arbiter connection (Exit)
  *  V Open remote connection   (Connect)
  *  V Close remote connection  (Disconnect)
  *  V Send & receive data      (Data packets)
+ * V Listener: Accept Multiple connections
+ * - Listener - Endpoint interface:
+ *  - New Connection
+ *  - Connection Closed by Remote
  */
 public class NetArbiter {
-
-    private static final String ARBI_ID = "arb:";
 
     private boolean isRunning = true;
     private int endpointPort, listenPort;
@@ -73,17 +76,6 @@ public class NetArbiter {
         return (int)num;
     }
 
-    private String copyString (ByteBuffer data) {
-        // String will always be in the form of [length : 1][string_data]
-        byte length = (byte)parseInt(data, 1);
-        StringBuilder result = new StringBuilder(length);
-
-        for (int i = 0; i < length; i++)
-            result.append((char)data.get());
-
-        return result.toString();
-    }
-
     // Encode data
     private String toNetInt (int num, int bytes) {
         assert (bytes > 0 && bytes <= 4);
@@ -100,13 +92,11 @@ public class NetArbiter {
         return output.toString();
     }
 
-    private void checkAndFetchMoreBytes(SocketChannel channel, ByteBuffer packetData, int amount) throws IOException {
+    private int checkAndFetchMoreBytes(SocketChannel channel, ByteBuffer packetData, int amount) throws IOException {
         if (packetData.remaining() >= amount)
-            return;
+            return amount;
 
         // Need to read in more bytes
-        //System.out.println("Getting more bytes");
-
         // Read in the rest of the data
         int totalBytes = packetData.remaining();
 
@@ -117,15 +107,15 @@ public class NetArbiter {
             if (bytes == 0)
                 continue;
 
-            if (bytes == -1) {
-                isRunning = false;
-                break;
-            }
+            if (bytes == -1)
+                return -1;
 
             // Add on to total
             totalBytes += bytes;
         }
         packetData.flip();
+
+        return amount;
     }
 
     /**
@@ -188,22 +178,22 @@ public class NetArbiter {
     }
 
     /**
-     * Checks the given id and sends the appropriate response
+     * Checks if the given id is invalid and sends the appropriate response
      *
      * @param endpoint The endpoint to send the response to
      * @param connID The connection id to verify
      * @return true if the id is valid
      * @throws IOException
      */
-    private boolean checkId (SocketChannel endpoint, int connID) throws IOException {
+    private boolean isInvalidId(SocketChannel endpoint, int connID) throws IOException {
         if (connID < 0 || connID >= remoteConnections.size()) {
             // Invalid connection ID
             System.out.println("Error: Invalid connection id (was " + connID + ")");
             sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_INVALID_ARG);
-            return false;
+            return true;
         }
 
-        return true;
+        return false;
     }
 
 
@@ -289,7 +279,7 @@ public class NetArbiter {
 
         connID = parseInt(packetData, 2);
 
-        if (!checkId(endpoint, connID))
+        if (isInvalidId(endpoint, connID))
             return;
 
         System.out.println("Disconnecting from remote arbiter connection #" + connID);
@@ -325,7 +315,7 @@ public class NetArbiter {
         connID = parseInt(packetData, 2);
 
         // Check the id
-        if (!checkId (endpoint, connID))
+        if (isInvalidId(endpoint, connID))
             return;
 
         int payloadSize = parseInt(packetData, 2);
@@ -504,6 +494,7 @@ public class NetArbiter {
 
         try {
             listener = ServerSocketChannel.open();
+            listener.configureBlocking(false);
             listener.bind(new InetSocketAddress(listenPort));
         } catch (IOException e) {
             e.printStackTrace();
@@ -512,18 +503,25 @@ public class NetArbiter {
         if (listener == null)
             return;
 
+        // Setup selector
+        try {
+            remoteChannels = Selector.open();
+            listener.register(remoteChannels, SelectionKey.OP_ACCEPT);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
         System.out.println("Waiting for connections");
 
         try {
-            SocketChannel arbiter = listener.accept();
-            arbiter.configureBlocking(false);
-
             ByteBuffer packet = ByteBuffer.allocate(1024);
             boolean isRunning = true;
 
+            /*SocketChannel arbiter = listener.accept();
+            arbiter.configureBlocking(false);
+
             System.out.println("Connection accepted");
 
-            //int sequence = 0;
             while (isRunning) {
                 // Read in data
                 packet.clear();
@@ -574,40 +572,9 @@ public class NetArbiter {
                         int payloadSize = Short.toUnsignedInt(packet.getShort());
 
                         checkAndFetchMoreBytes(arbiter, packet, payloadSize);
-                        /*if (payloadSize > packet.remaining()) {
-                            //System.out.println("Getting more bytes");
-
-                            // Read in the rest of the data
-                            int totalBytes = packet.remaining();
-
-                            packet.compact();
-                            while (totalBytes < payloadSize) {
-                                int bytes = arbiter.read(packet);
-
-                                if (bytes == 0)
-                                    continue;
-
-                                if (bytes == -1) {
-                                    isRunning = false;
-                                    break;
-                                }
-
-                                // Add on to total
-                                totalBytes += bytes;
-                            }
-                            packet.flip();
-
-
-                        }*/
 
                         if (!isRunning)
                             break;
-
-                        /*System.out.print (++sequence);
-                        for (int i = 0; i < payloadSize; i++)
-                            System.out.print((char) packet.get());
-                        System.out.println();
-                        packet.reset()*/
 
                         // Send the data back
                         ByteBuffer echo = ByteBuffer.allocate(payloadSize + Short.BYTES);
@@ -620,7 +587,110 @@ public class NetArbiter {
                         packet.position(packet.position() + payloadSize);
                     }
                 }
+            }*/
+
+            while (isRunning) {
+                remoteChannels.select();
+
+                // At least 1 channel is ready
+                Set <SelectionKey> keys = remoteChannels.selectedKeys();
+                Iterator <SelectionKey> iterator = keys.iterator();
+
+                while (iterator.hasNext()) {
+                    SelectionKey key = iterator.next();
+
+                    if (key.isAcceptable()) {
+                        // Accept the current connection
+                        System.out.println("Connection acceptance");
+
+                        SocketChannel arbiter = listener.accept();
+
+                        // Listen for the ack
+                        packet.clear();
+                        arbiter.read(packet);
+                        packet.flip();
+
+                        int packetID = -1;
+
+                        if (packet.remaining() >= 4)
+                            packetID = packet.getInt();
+
+                        if (packetID == (PCKTID_HEADER | PCKTID_CONNECT_ESTABLISH)) {
+                            // Finalize the connection
+                            arbiter.configureBlocking(false);
+                            arbiter.register(remoteChannels, SelectionKey.OP_READ);
+
+                            packet.clear();
+                            packet.putInt(PCKTID_HEADER | PCKTID_ACK);
+                            packet.flip();
+                            arbiter.write(packet);
+                        } else {
+                            // Bad connection
+                            System.out.println("Connection rejection");
+                            arbiter.close();
+                        }
+                    }
+
+                    if (key.isReadable()) {
+                        SocketChannel arbiter = (SocketChannel) key.channel();
+
+                        // Read in data
+                        packet.clear();
+                        int length = arbiter.read(packet);
+                        packet.flip();
+
+                        if (length == -1) {
+                            System.out.println("End of channel");
+                            arbiter.close();
+                            break;
+                        }
+
+                        if (length == 0)
+                            continue;
+
+                        while (packet.hasRemaining()) {
+                            // Get the packet id
+                            packet.mark();
+
+                            int packetID = packet.getInt();
+
+                            if ((packetID & PCKTID_HEADER) == PCKTID_HEADER) {
+                                if ((packetID & 0xFF) == PCKTID_DISCONNECT_NOTIFY) {
+                                    System.out.println("Disconnect from client");
+                                    break;
+                                } else {
+                                    System.out.println("Invalid interconnect id: " + Integer.toHexString(packetID & 0xFF));
+                                }
+                            } else {
+                                // Print out data
+                                packet.reset();
+
+                                int payloadSize = Short.toUnsignedInt(packet.getShort());
+
+                                if (checkAndFetchMoreBytes(arbiter, packet, payloadSize) == -1) {
+                                    arbiter.close();
+                                    break;
+                                }
+
+                                // Send the data back
+                                ByteBuffer echo = ByteBuffer.allocate(payloadSize + Short.BYTES);
+                                echo.putShort ((short) payloadSize);
+                                echo.put(packet.array(), packet.position(), payloadSize);
+                                echo.flip();
+                                arbiter.write(echo);
+
+                                // Move to the next data bit
+                                packet.position(packet.position() + payloadSize);
+                            }
+                        }
+                    }
+
+                    iterator.remove();
+                }
             }
+
+            remoteChannels.close();
+            listener.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
