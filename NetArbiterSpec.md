@@ -16,7 +16,8 @@ netFD := WaitForConnection(port : int, var address)
   - Packet passthrough
   
 # Notes:
-Remote inbound and outbound connection ids are shared
+ - Remote inbound and outbound connection ids are shared
+ - Arbiter commands have asynchronous responses
 
 # Protocols
 ## Arbiter  - Arbiter
@@ -43,45 +44,42 @@ Data Receive:
 
 ## Endpoint - Arbiter
 Exit:
-```arb:X```
+```X```
 It is the endpoint's responsibility for closing the connection.
 All remote connections will be closed by the arbiter.
 
 Connect To:
-```arb:C[port : 2][address : lstring]```
+```C[port : 2][address : lstring]```
 
 Disconnect:
-```arb:D[connID : 2]```
+```D[connID : 2]```
 
 Send Data:
-```[connID : 2][size : 2][payload]```
+```P[connID : 2][size : 2][payload]```
 
 Arbiter must ignore any invalid command id's and invalid commands
 
 ## Arbiter - Endpoint
-Connection Established (S -> EC)
-```arb:E[connID : 2]```
-
 New Connection (D -> ES)
-```arb:N[connID : 2]```
+```N[connID : 2]```
 
 Connection Closed by Remote
-```arb:R[connID : 2]``` 
+```R[connID : 2]``` 
 
 Error:
-```arb:W[errorCode : 2]```
+```W[errorCode : 2]```
 
-Data Sent Successfully:
-```arb:S```
+Command Successful:
+```S[param : 2]```
 
 Data Receive:
-```[connID : 2][size : 2][payload]```
+```G[connID : 2][size : 2][payload]```
 
 ### Defined Commands:
 
-| ID (char) | Name | Payload | Description |
+| ID (char) | Name       | Payload                               | Description                                          |
 |-----------|------------|---------------------------------------|------------------------------------------------------|
-| 0x45('C') | CONNECT    | ```[port : 2][address : lstring]```   | Establishes a connection to a remote arbiter         |
-| 0x45('D') | DISCONNECT | ```[connID : 2]```                    | Disconnects from the specified remote arbiter        |
-| 0x45('X') | EXIT       | N/A                                   | Stops communication between the arbiter and endpoint |
-|    N/A    | SEND_DATA  | ```[connID : 2][size : 2][payload]``` | Sends the given data to a remote arbiter             |
+| 0x00('C') | CONNECT    | ```[port : 2][address : lstring]```   | Establishes a connection to a remote arbiter         |
+| 0x00('D') | DISCONNECT | ```[connID : 2]```                    | Disconnects from the specified remote arbiter        |
+| 0x00('X') | EXIT       | N/A                                   | Stops communication between the arbiter and endpoint |
+| 0x00('P') | SEND_DATA  | ```[connID : 2][size : 2][payload]``` | Sends the given data to a remote arbiter             |

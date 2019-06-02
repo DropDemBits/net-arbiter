@@ -51,7 +51,10 @@ proc EndpointTest ()
     Input.Flush ()
     loop
         exit when Input.hasch ()
-        len := arb -> writePacket (connID, data)
+        
+        for i : 1 .. 100
+            len := arb -> writePacket (connID, data)
+        end for
         
         %% Receive the echo'd data %%
         var recvStart : int := Time.Elapsed
@@ -62,8 +65,20 @@ proc EndpointTest ()
         
         loop
             var recentPacket : ^Packet := arb -> getPacket ()
+            exit when recentPacket = nil
+            
+            % Put the data onto the screen
+            /*
+            put recentPacket -> connID, " "..
+            put recentPacket -> size, " "..
+            
+            for i : 0 .. recentPacket -> size - 1
+                put char @ (recentPacket -> bytes + i) ..
+            end for
+            put ""
+            */
+            
             exit when not arb -> nextPacket ()
-            put "Oops, more packets!"
         end loop
     end loop
     Input.Flush ()

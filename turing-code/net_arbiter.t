@@ -66,59 +66,43 @@ module pervasive NetArbiter
         var pendingPackets : ^Packet := nil
         var pendingPacketsTail : ^Packet := nil
         
+        %% Asynchronous Dealsies %%
+        % Is there a command being currently processed
+        var isCommandInProgress : boolean := false
+        % Response for the current command
+        var responseParam : int4 := -1
+        
         var lastBytes : int := 0
         
         
         %%% Private Functions %%%
         /**
-        * Parses the response given by the net arbiter
+        * Handles the response given by the net arbiter
         * 
         * Returns:
         * The response parameter, or -1 if an error occurred
         */
-        fcn parseResponse () : int4
+        fcn handleResponse (responseID : char) : int4
+            % By this point, the command has been handled
+            isCommandInProgress := false
+        
             var param : int4 := -1
-            var responseHeader : array 1 .. 5 of nat1
             var paramResponse : string
             
-            % Wait until a response from the arbiter is received
-            if Net.BytesAvailable (netFD) =0 then
-                loop
-                    exit when Net.BytesAvailable (netFD) > 0
-                end loop
-            end if
-            
-            % Read in the response
-            read : netFD, responseHeader : 5
-            
-            % Verify the response header
-            const ARB_HEADER : string := "arb:"
-            
-            for i : 1 .. 4
-                if chr (responseHeader (i)) not= ARB_HEADER (i) then
-                    errno := ARB_ERROR_INVALID_RESPONSE
-                    result -1
-                end if
-            end for
-            
             % Handle the appropriate response
-            var responseID : char := chr (responseHeader (5))
             case responseID of
-            label 'E':
-                % Connection Established
-                % Read in the connection ID
+            label 'S':
+                % Command successful
+                % Read in the return code
                 read : netFD, paramResponse : 4
                 
                 if not strintok(paramResponse, 16) then
-                    % Bad connection ID
+                    % Bad return code
                     errno := ARB_ERROR_INVALID_RESPONSE
                     result -1
                 end if
                 
                 param := strint (paramResponse, 16)
-            label 'S':
-                % Data sent successfully
-                param := 0
             label 'W':
                 % Error
                 % Read in the error code
@@ -150,8 +134,57 @@ module pervasive NetArbiter
             end case
 
             result param
-        end parseResponse
+        end handleResponse
         
+        /**
+        * Handles the current incoming packet
+        */
+        proc handlePacket ()
+            % Packet Format: [connID][size][payload]
+            var connID, payloadSize : nat4
+            var numStr : string := ""
+            
+            % Get connID
+            read : netFD, numStr : 4
+            %put numStr..
+            connID := strint (numStr, 16)
+            
+            % Get payload size
+            read : netFD, numStr : 4
+            %put numStr..
+            payloadSize := strint (numStr, 16)
+            
+            % Read in the payload
+            var payload : array 1 .. payloadSize of nat1
+            read : netFD, payload : payloadSize
+            
+            % Build the packet data
+            var packet : ^Packet
+            new packet
+            
+            packet -> connID := cheat (nat2, connID)
+            packet -> size := cheat (nat2, payloadSize)
+            packet -> bytes := addr (payload)
+            packet -> next := nil
+            
+            % Append to packet list
+            if pendingPackets = nil then
+                % Empty queue
+                pendingPackets := packet
+                pendingPacketsTail := packet
+            else
+                % List with things in it
+                pendingPacketsTail -> next := packet
+                pendingPacketsTail := packet
+            end if
+            %put ""
+            
+            /*put "RecvData: ", connID, " ", payloadSize, " " ..
+            for i : 1 .. payloadSize
+                put chr (payload (i)) ..
+            end for
+            put ""*/
+        end handlePacket
         
         %%% Exported Functions %%%
         /**
@@ -172,7 +205,7 @@ module pervasive NetArbiter
         end getError
         
         /**
-        * Polls the arbiter to see if there is incoming data
+        * Polls the arbiter to see if there is any incoming data
         * Must be called before a getPacket ()
         *
         * Returns:
@@ -185,53 +218,21 @@ module pervasive NetArbiter
             end if
         
             % There is some pending data available
-            % Packet Format: [connID][size][payload]
+            % It is either a response, or a packet
             loop
                 exit when Net.BytesAvailable (netFD) = 0
                 
-                var connID, payloadSize : nat4
-                var numStr : string := ""
+                % Get the response id
+                var responseID : char
+                read : netFD, responseID : 1
                 
-                % Get connID
-                read : netFD, numStr : 4
-                put numStr..
-                connID := strint (numStr, 16)
-                
-                % Get payload size
-                read : netFD, numStr : 4
-                put numStr..
-                payloadSize := strint (numStr, 16)
-                
-                % Read in the payload
-                var payload : array 1 .. payloadSize of nat1
-                read : netFD, payload : payloadSize
-                
-                % Build the packet data
-                var packet : ^Packet
-                new packet
-                
-                packet -> connID := cheat (nat2, connID)
-                packet -> size := cheat (nat2, payloadSize)
-                packet -> bytes := addr (payload)
-                packet -> next := nil
-                
-                % Append to packet list
-                if pendingPackets = nil then
-                    % Empty queue
-                    pendingPackets := packet
-                    pendingPacketsTail := packet
-                else
-                    % List with things in it
-                    pendingPacketsTail -> next := packet
-                    pendingPacketsTail := packet
-                end if
-                put ""
-                
-                /*put "RecvData: ", connID, " ", payloadSize, " " ..
-                for i : 1 .. payloadSize
-                    put chr (payload (i)) ..
-                end for
-                put ""*/
+                case responseID of
+                label 'G':
+                    responseParam := -1
+                    handlePacket()
+                label :
+                    responseParam := handleResponse(responseID)
+                end case
             end loop
             
             result true
@@ -278,33 +279,42 @@ module pervasive NetArbiter
         * Sends data to a remote connection
         */
         fcn writePacket (connID : int4, byteData : array 1 .. * of nat1) : int
-            % Command format: [connID][size][payload ...]
-            % Packet length: Header (5) + ConnID (4) + Size (4) + Payload (???)
-            var packetLength : nat4 := 4 + 4 + upper (byteData)
+            % Command format: P[connID][size][payload ...]
+            % Packet length: CmdID (1) + ConnID (4) + Size (4) + Payload (???)
+            var packetLength : nat4 := 1 + 4 + 4 + upper (byteData)
             var arbData : array 1 .. packetLength of nat1
             
+            % Command ID
+            arbData (1) := ord ('P')
+            
             % Connection ID
-            arbData (1) := ITOHX ((connID shr 12) & 16#0F)
-            arbData (2) := ITOHX ((connID shr  8) & 16#0F)
-            arbData (3) := ITOHX ((connID shr  4) & 16#0F)
-            arbData (4) := ITOHX ((connID shr  0) & 16#0F)
+            arbData (2) := ITOHX ((connID shr 12) & 16#0F)
+            arbData (3) := ITOHX ((connID shr  8) & 16#0F)
+            arbData (4) := ITOHX ((connID shr  4) & 16#0F)
+            arbData (5) := ITOHX ((connID shr  0) & 16#0F)
             
             % Payload size
-            arbData (5) := ITOHX ((upper (byteData) shr 12) & 16#0F)
-            arbData (6) := ITOHX ((upper (byteData) shr  8) & 16#0F)
-            arbData (7) := ITOHX ((upper (byteData) shr  4) & 16#0F)
-            arbData (8) := ITOHX ((upper (byteData) shr  0) & 16#0F)
+            arbData (6) := ITOHX ((upper (byteData) shr 12) & 16#0F)
+            arbData (7) := ITOHX ((upper (byteData) shr  8) & 16#0F)
+            arbData (8) := ITOHX ((upper (byteData) shr  4) & 16#0F)
+            arbData (9) := ITOHX ((upper (byteData) shr  0) & 16#0F)
             
             % Payload
             for i : 1 .. upper (byteData)
-                arbData (8 + i) := byteData (i)
+                arbData (9 + i) := byteData (i)
             end for
             
             % Send the packet
             write : netFD, arbData : packetLength
             
+            % Wait for the response
             errno := ARB_ERROR_NO_ERROR
-            result parseResponse ()
+            loop
+                exit when not isCommandInProgress
+                var dummy := poll ()
+            end loop
+            
+            result 0
         end writePacket
         
         /**
@@ -326,39 +336,47 @@ module pervasive NetArbiter
         *   If connection to the remote arbiter was refused
         */
         fcn connectTo (host : string, port : nat2) : int4
-            % Command format: arb:C[port][hostname]
-            % Packet length: Header (5) + Port (4) + StrLen (2) + String (0 .. 255)
-            const packetLength : int := 5 + 4 + (2 + length (host))
+            % Command format: C[port][hostname]
+            % Packet length: CmdId (1) + Port (4) + StrLen (2) + String (0 .. 255)
+            const packetLength : int := 1 + 4 + (2 + length (host))
             var arbConnect : array 1 .. packetLength of nat1
             
-            arbConnect (1) := ord ('a')
-            arbConnect (2) := ord ('r')
-            arbConnect (3) := ord ('b')
-            arbConnect (4) := ord (':')
-            arbConnect (5) := ord ('C')
+            % Deal with command state
+            if isCommandInProgress then
+                % Command is in progress
+                result -1
+            end if
+            isCommandInProgress := true
+            
+            arbConnect (1) := ord ('C')
             
             % Port
-            arbConnect (6) := ITOHX ((port shr 12) & 16#0F)
-            arbConnect (7) := ITOHX ((port shr  8) & 16#0F)
-            arbConnect (8) := ITOHX ((port shr  4) & 16#0F)
-            arbConnect (9) := ITOHX ((port shr  0) & 16#0F)
+            arbConnect (2) := ITOHX ((port shr 12) & 16#0F)
+            arbConnect (3) := ITOHX ((port shr  8) & 16#0F)
+            arbConnect (4) := ITOHX ((port shr  4) & 16#0F)
+            arbConnect (5) := ITOHX ((port shr  0) & 16#0F)
             
             % String length
-            arbConnect (10) := ITOHX ((length (host) shr  4) & 16#0F)
-            arbConnect (11) := ITOHX ((length (host) shr  0) & 16#0F)
+            arbConnect (6) := ITOHX ((length (host) shr  4) & 16#0F)
+            arbConnect (7) := ITOHX ((length (host) shr  0) & 16#0F)
             
             % String
             for i : 1 .. length (host)
-                arbConnect (11 + i) := ord (host (i))
+                arbConnect (7 + i) := ord (host (i))
             end for
             
             % Send the command
             write : netFD, arbConnect : upper (arbConnect)
             
-            % Check for an error
+            % Wait for the response
             errno := ARB_ERROR_NO_ERROR
-            var connID := parseResponse ()
-            result connID
+            loop
+                exit when not isCommandInProgress
+                var dummy := poll ()
+            end loop
+            
+            % responseParam has the connection id
+            result responseParam
         end connectTo
         
         /**
@@ -372,34 +390,35 @@ module pervasive NetArbiter
         *   If the connection id given was invalid
         */
         proc disconnect (connID : int4)
-            % Command format: arb:D[connID]
-            % Packet length: Header (5) + Connection ID (4)
-            const packetLength : int := 5 + 4
+            % Command format: D[connID]
+            % Packet length: CmdId (1) + Connection ID (4)
+            const packetLength : int := 1 + 4
             var arbDisconnect : array 1 .. packetLength of nat1
             
+            % Deal with command state
+            if isCommandInProgress then
+                return
+            end if
+            isCommandInProgress := true
+            
             % Header
-            arbDisconnect (1) := ord ('a')
-            arbDisconnect (2) := ord ('r')
-            arbDisconnect (3) := ord ('b')
-            arbDisconnect (4) := ord (':')
-            arbDisconnect (5) := ord ('D')
+            arbDisconnect (1) := ord ('D')
             
             % Connection ID
-            arbDisconnect (6) := ITOHX ((connID shr 12) & 16#0F)
-            arbDisconnect (7) := ITOHX ((connID shr  8) & 16#0F)
-            arbDisconnect (8) := ITOHX ((connID shr  4) & 16#0F)
-            arbDisconnect (9) := ITOHX ((connID shr  0) & 16#0F)
+            arbDisconnect (2) := ITOHX ((connID shr 12) & 16#0F)
+            arbDisconnect (3) := ITOHX ((connID shr  8) & 16#0F)
+            arbDisconnect (4) := ITOHX ((connID shr  4) & 16#0F)
+            arbDisconnect (5) := ITOHX ((connID shr  0) & 16#0F)
             
             % Send the command
             write : netFD, arbDisconnect : upper (arbDisconnect)
             
-            % Check to see if an error occurred
+            % Wait for the response
             errno := ARB_ERROR_NO_ERROR
-            
-            if Net.BytesAvailable (netFD) > 0 then
-                var dummy := parseResponse ()
-                return
-            end if
+            loop
+                exit when not isCommandInProgress
+                var dummy := poll ()
+            end loop
         end disconnect
         
         /**
@@ -462,10 +481,10 @@ module pervasive NetArbiter
                 return
             end if
             
-            % Command format: arb:X
+            % Command format: X
             % Send the stop command
-            const arbStop : array 1 .. 5 of nat1 := init (ord ('a'), ord ('r'), ord ('b'), ord (':'), ord ('X'))
-            write : netFD, arbStop : 5
+            const arbStop : nat1 := ord ('X')
+            write : netFD, arbStop : 1
             Net.CloseConnection (netFD)
             
             isRunning := false
