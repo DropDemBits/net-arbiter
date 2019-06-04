@@ -52,6 +52,12 @@ module pervasive NetArbiter
     % Main net arbiter code
     class Arbiter
         export startup, shutdown, connectTo, disconnect, poll, getPacket, nextPacket, writePacket, getError
+        %% Normal constants %%
+        const ARB_RESPONSE_NEW_CONNECTION : nat1    := ord ('N')
+        const ARB_RESPONSE_CONNECTION_CLOSED : nat1 := ord ('R')
+        const ARB_RESPONSE_ERROR : nat1             := ord ('W')
+        const ARB_RESPONSE_COMMAND_SUCCESS : nat1   := ord ('S')
+        
         %% Stateful variables %%
         % Current run state of the arbiter
         var isRunning : boolean := false
@@ -128,6 +134,46 @@ module pervasive NetArbiter
                 if param not= ARB_ERROR_NO_ERROR then
                     param := -1
                 end if
+            % TODO: Handle remote connections
+            label 'N', 'R':
+                % New Connection, or Remote closed connection
+                % Get the connection id
+                read : netFD, paramResponse : 4
+                
+                if not strintok(paramResponse, 16) then
+                    % Bad connection id
+                    errno := ARB_ERROR_INVALID_RESPONSE
+                    result -1
+                end if
+                
+                var connID : nat2
+                connID := strint (paramResponse, 16)
+                
+                % Build the response data
+                var packet : ^Packet
+                new packet
+                
+                packet -> connID := cheat (nat2, connID)
+                packet -> size := cheat (nat2, 0)
+                packet -> next := nil
+                
+                % Select the appropriate data pointer
+                if responseID = 'N' then
+                    packet -> bytes := cheat (nat1, ARB_RESPONSE_NEW_CONNECTION)
+                else
+                    packet -> bytes := cheat (nat1, ARB_RESPONSE_CONNECTION_CLOSED)
+                end if
+                
+                % Append to packet list
+                if pendingPackets = nil then
+                    % Empty queue
+                    pendingPackets := packet
+                    pendingPacketsTail := packet
+                else
+                    % List with things in it
+                    pendingPacketsTail -> next := packet
+                    pendingPacketsTail := packet
+                end if
             label :
                 errno := ARB_ERROR_INVALID_RESPONSE
                 result -1
@@ -146,13 +192,16 @@ module pervasive NetArbiter
             
             % Get connID
             read : netFD, numStr : 4
-            %put numStr..
             connID := strint (numStr, 16)
             
             % Get payload size
             read : netFD, numStr : 4
-            %put numStr..
             payloadSize := strint (numStr, 16)
+            
+            if payloadSize = 0 then
+                % Ignore 0-length packets (used for special data)
+                return
+            end if
             
             % Read in the payload
             var payload : array 1 .. payloadSize of nat1
@@ -177,13 +226,6 @@ module pervasive NetArbiter
                 pendingPacketsTail -> next := packet
                 pendingPacketsTail := packet
             end if
-            %put ""
-            
-            /*put "RecvData: ", connID, " ", payloadSize, " " ..
-            for i : 1 .. payloadSize
-                put chr (payload (i)) ..
-            end for
-            put ""*/
         end handlePacket
         
         %%% Exported Functions %%%
@@ -209,7 +251,7 @@ module pervasive NetArbiter
         * Must be called before a getPacket ()
         *
         * Returns:
-        * true if there is any pending packets, false otherwise
+        * true if there is any pending data, false otherwise
         */
         fcn poll () : boolean
             if Net.BytesAvailable (netFD) = 0 then
@@ -303,6 +345,11 @@ module pervasive NetArbiter
             for i : 1 .. upper (byteData)
                 arbData (9 + i) := byteData (i)
             end for
+            
+            for i : 1 .. packetLength
+                put chr(arbData (i)) ..
+            end for
+            put ""
             
             % Send the packet
             write : netFD, arbData : packetLength

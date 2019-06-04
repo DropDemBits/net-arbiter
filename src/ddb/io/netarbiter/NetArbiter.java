@@ -27,9 +27,9 @@ import static ddb.io.netarbiter.Constants.*;
  *  V Close remote connection  (Disconnect)
  *  V Send & receive data      (Data packets)
  * V Listener: Accept Multiple connections
- * - Listener - Endpoint interface:
- *  - New Connection
- *  - Connection Closed by Remote
+ * V Listener - Endpoint interface:
+ *  V New Connection
+ *  V Connection Closed by Remote
  */
 public class NetArbiter {
 
@@ -186,7 +186,7 @@ public class NetArbiter {
      * @throws IOException
      */
     private boolean isInvalidId(SocketChannel endpoint, int connID) throws IOException {
-        if (connID < 0 || connID >= remoteConnections.size()) {
+        if (connID < 0 || connID >= remoteConnections.size() || remoteConnections.get(connID) == null) {
             // Invalid connection ID
             System.out.println("Error: Invalid connection id (was " + connID + ")");
             sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_INVALID_ARG);
@@ -194,6 +194,34 @@ public class NetArbiter {
         }
 
         return false;
+    }
+
+    private int addChannel (SocketChannel channel) throws IOException {
+        int connID;
+
+        if (connectionIdAvailable) {
+            // Use a recently-used slot
+            connID = freeConnectionIDs.poll();
+            remoteConnections.set(connID, channel);
+            connectionIdAvailable = !freeConnectionIDs.isEmpty();
+        } else {
+            // Add connection to the list of remotes
+            connID = remoteConnections.size();
+            remoteConnections.add(channel);
+        }
+
+        // Add Socket to the list of remote sockets
+        channel.configureBlocking(false);
+        channel.register(remoteChannels, SelectionKey.OP_READ, connID);
+
+        return connID;
+    }
+
+    private void removeChannel (int connID) {
+        // Add the connection id to the available list of ids
+        remoteConnections.set (connID, null);
+        connectionIdAvailable = true;
+        freeConnectionIDs.add(connID);
     }
 
 
@@ -223,9 +251,9 @@ public class NetArbiter {
 
 
         System.out.println("Connecting to remote arbiter at " + host + ":" + port);
-        int connID;
 
         try {
+            int connID;
             System.out.println("Connecting to " + host + ":" + port);
 
             // Try connecting to the remote arbiter
@@ -237,20 +265,7 @@ public class NetArbiter {
                 sendResponse(endpoint, ARB_REP_ERROR, ARB_ERR_CONNECTION_FAILED);
             }
 
-            if (connectionIdAvailable) {
-                // Use a recently-used slot
-                connID = freeConnectionIDs.poll();
-                remoteConnections.set(connID, remoteSocket);
-                connectionIdAvailable = !freeConnectionIDs.isEmpty();
-            } else {
-                // Add connection to the list of remotes
-                connID = remoteConnections.size();
-                remoteConnections.add(remoteSocket);
-            }
-
-            // Add Socket to the list of remote sockets
-            remoteSocket.configureBlocking(false);
-            remoteSocket.register(remoteChannels, SelectionKey.OP_READ, connID);
+            connID = addChannel(remoteSocket);
 
             // Send back response
             System.out.println("Connection Successful");
@@ -294,10 +309,8 @@ public class NetArbiter {
         connection.write(message);
         connection.close();
 
-        // Add the connection id to the available list of ids
-        remoteConnections.set (connID, null);
-        connectionIdAvailable = true;
-        freeConnectionIDs.add(connID);
+        removeChannel (connID);
+
 
         // Send back a good response
         sendResponse(endpoint, ARB_REP_CMD_SUCCESSFUL, 0);
@@ -380,9 +393,10 @@ public class NetArbiter {
      * - Reads in data from remote connections
      */
     private void startEndpoint() {
-        // Setup the endpoint listener & wait for an endpoint
         SocketChannel endpoint = null;
+        ServerSocketChannel listener = null;
 
+        // Setup the endpoint listener & wait for an endpoint to connect
         try {
             ServerSocketChannel endpointListener;
             endpointListener = ServerSocketChannel.open();
@@ -403,11 +417,25 @@ public class NetArbiter {
         if (endpoint == null)
             return;
 
-        // TODO: Setup Remote Connection Listener
         try {
             remoteChannels = Selector.open();
         } catch (IOException e) {
             e.printStackTrace();
+        }
+
+        if (listenPort != -1) {
+            // Setup the remote connection listener
+            try {
+                listener = ServerSocketChannel.open();
+                listener.configureBlocking(false);
+                listener.bind(new InetSocketAddress(listenPort));
+                listener.register(remoteChannels, SelectionKey.OP_ACCEPT);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+            if (listener == null)
+                return;
         }
 
         // State: Endpoint connected, Endpoint Listener closed
@@ -438,15 +466,68 @@ public class NetArbiter {
                     while (iterator.hasNext()) {
                         SelectionKey key = iterator.next();
 
+                        if (key.isAcceptable()) {
+                            // Accept the connection
+                            System.out.println("Connection acceptance");
+
+                            SocketChannel arbiter = listener.accept();
+
+                            // Listen for the ack
+                            packetData.clear();
+                            arbiter.read(packetData);
+                            packetData.flip();
+
+                            int packetID = -1;
+
+                            if (packetData.remaining() >= 4)
+                                packetID = packetData.getInt();
+
+                            if (packetID == (PCKTID_HEADER | PCKTID_CONNECT_ESTABLISH)) {
+                                // Finalize the connection
+                                packetData.clear();
+                                packetData.putInt(PCKTID_HEADER | PCKTID_ACK);
+                                packetData.flip();
+                                arbiter.write(packetData);
+
+                                // Send the endpoint a new connection response
+                                // Format: N[connID : 2]
+                                int connID = addChannel(arbiter);
+
+                                packetData.clear();
+                                packetData.put(ARB_REP_NEW_CONNECTION);
+                                packetData.put(toNetInt(connID, 2).getBytes());
+                                packetData.flip();
+
+                                endpoint.write(packetData);
+                            } else {
+                                // Bad connection
+                                System.out.println("Connection rejection");
+                                arbiter.close();
+                            }
+                        }
+
                         if (key.isReadable()) {
                             // Readable channel has been given, send to the endpoint
                             SocketChannel remote = (SocketChannel) key.channel();
 
                             packetData.clear();
-                            remote.read(packetData);
+                            int len = remote.read(packetData);
                             packetData.flip();
 
                             while (packetData.hasRemaining()) {
+                                packetData.mark();
+
+                                // Check if the remote connection has closed
+                                int packetID = packetData.getInt();
+
+                                if (packetID == (PCKTID_HEADER | PCKTID_DISCONNECT_NOTIFY)) {
+                                    // Remote connection has been closed, handle below
+                                    len = -1;
+                                    break;
+                                }
+
+                                packetData.reset();
+
                                 // Get payload size
                                 int payloadSize = Short.toUnsignedInt(packetData.getShort());
 
@@ -465,12 +546,47 @@ public class NetArbiter {
 
                                 packetData.position(packetData.position() + payloadSize);
                             }
+
+                            if (len == -1) {
+                                // Handle a closed connection
+                                int connID = (int) key.attachment();
+                                removeChannel(connID);
+                                remote.close();
+
+                                // Notify the endpoint
+                                // Format: R[connID : 2]
+                                packetData.clear();
+                                packetData.put(ARB_REP_REMOTE_CLOSED);
+                                packetData.put(toNetInt(connID, 2).getBytes());
+                                packetData.flip();
+                                endpoint.write(packetData);
+                            }
                         }
 
                         iterator.remove();
                     }
                 }
             }
+
+            // Close remote connections
+            // Construct the disconnect packet
+            ByteBuffer message = ByteBuffer.allocate(4);
+            message.putInt(PCKTID_HEADER | PCKTID_DISCONNECT_NOTIFY);
+            message.flip();
+
+            remoteConnections.forEach(sock -> {
+                if (sock == null)
+                    return;
+
+                try {
+                    // Send the disconnect notify packet
+                    message.rewind();
+                    sock.write(message);
+                    sock.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            });
 
             // Gracefully close connection with endpoint
             remoteChannels.close();
@@ -480,220 +596,6 @@ public class NetArbiter {
         }
 
         // State: Endpoint disconnected
-    }
-
-    /**
-     * Begins the simple server listener
-     * To be merged into the "startEndpoint" method
-     */
-    private void startListener() {
-        System.out.println("Waiting for a connection from the client");
-
-        // Setup the server channel
-        ServerSocketChannel listener = null;
-
-        try {
-            listener = ServerSocketChannel.open();
-            listener.configureBlocking(false);
-            listener.bind(new InetSocketAddress(listenPort));
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        if (listener == null)
-            return;
-
-        // Setup selector
-        try {
-            remoteChannels = Selector.open();
-            listener.register(remoteChannels, SelectionKey.OP_ACCEPT);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        System.out.println("Waiting for connections");
-
-        try {
-            ByteBuffer packet = ByteBuffer.allocate(1024);
-            boolean isRunning = true;
-
-            /*SocketChannel arbiter = listener.accept();
-            arbiter.configureBlocking(false);
-
-            System.out.println("Connection accepted");
-
-            while (isRunning) {
-                // Read in data
-                packet.clear();
-                int length = arbiter.read(packet);
-                packet.flip();
-
-                if (length == -1) {
-                    System.out.println("End of channel");
-                    arbiter.close();
-                    break;
-                }
-
-                if (length == 0)
-                    continue;
-
-                while (packet.hasRemaining()) {
-                    // Get the packet id
-                    packet.mark();
-
-                    int packetID = packet.getInt();
-
-                    if ((packetID & PCKTID_HEADER) == PCKTID_HEADER) {
-                        switch (packetID & 0xFF) {
-                            case PCKTID_CONNECT_ESTABLISH:
-                                System.out.println("Connection requested from client");
-
-                                // Send an ack for the connection request
-                                packet.clear();
-                                packet.putInt(PCKTID_HEADER | PCKTID_ACK);
-                                packet.flip();
-
-                                arbiter.write(packet);
-                                break;
-                            case PCKTID_DISCONNECT_NOTIFY:
-                                System.out.println("Disconnect from client");
-                                isRunning = false;
-                                break;
-                            default:
-                                System.out.println("Invalid interconnect id: " + Integer.toHexString(packetID & 0xFF));
-                                break;
-                        }
-                    } else {
-                        //System.out.println("Data Received:");
-
-                        // Print out data
-                        packet.reset();
-
-                        int payloadSize = Short.toUnsignedInt(packet.getShort());
-
-                        checkAndFetchMoreBytes(arbiter, packet, payloadSize);
-
-                        if (!isRunning)
-                            break;
-
-                        // Send the data back
-                        ByteBuffer echo = ByteBuffer.allocate(payloadSize + Short.BYTES);
-                        echo.putShort ((short) payloadSize);
-                        echo.put(packet.array(), packet.position(), payloadSize);
-                        echo.flip();
-                        arbiter.write(echo);
-
-                        // Move to the next data bit
-                        packet.position(packet.position() + payloadSize);
-                    }
-                }
-            }*/
-
-            while (isRunning) {
-                remoteChannels.select();
-
-                // At least 1 channel is ready
-                Set <SelectionKey> keys = remoteChannels.selectedKeys();
-                Iterator <SelectionKey> iterator = keys.iterator();
-
-                while (iterator.hasNext()) {
-                    SelectionKey key = iterator.next();
-
-                    if (key.isAcceptable()) {
-                        // Accept the current connection
-                        System.out.println("Connection acceptance");
-
-                        SocketChannel arbiter = listener.accept();
-
-                        // Listen for the ack
-                        packet.clear();
-                        arbiter.read(packet);
-                        packet.flip();
-
-                        int packetID = -1;
-
-                        if (packet.remaining() >= 4)
-                            packetID = packet.getInt();
-
-                        if (packetID == (PCKTID_HEADER | PCKTID_CONNECT_ESTABLISH)) {
-                            // Finalize the connection
-                            arbiter.configureBlocking(false);
-                            arbiter.register(remoteChannels, SelectionKey.OP_READ);
-
-                            packet.clear();
-                            packet.putInt(PCKTID_HEADER | PCKTID_ACK);
-                            packet.flip();
-                            arbiter.write(packet);
-                        } else {
-                            // Bad connection
-                            System.out.println("Connection rejection");
-                            arbiter.close();
-                        }
-                    }
-
-                    if (key.isReadable()) {
-                        SocketChannel arbiter = (SocketChannel) key.channel();
-
-                        // Read in data
-                        packet.clear();
-                        int length = arbiter.read(packet);
-                        packet.flip();
-
-                        if (length == -1) {
-                            System.out.println("End of channel");
-                            arbiter.close();
-                            break;
-                        }
-
-                        if (length == 0)
-                            continue;
-
-                        while (packet.hasRemaining()) {
-                            // Get the packet id
-                            packet.mark();
-
-                            int packetID = packet.getInt();
-
-                            if ((packetID & PCKTID_HEADER) == PCKTID_HEADER) {
-                                if ((packetID & 0xFF) == PCKTID_DISCONNECT_NOTIFY) {
-                                    System.out.println("Disconnect from client");
-                                    break;
-                                } else {
-                                    System.out.println("Invalid interconnect id: " + Integer.toHexString(packetID & 0xFF));
-                                }
-                            } else {
-                                // Print out data
-                                packet.reset();
-
-                                int payloadSize = Short.toUnsignedInt(packet.getShort());
-
-                                if (checkAndFetchMoreBytes(arbiter, packet, payloadSize) == -1) {
-                                    arbiter.close();
-                                    break;
-                                }
-
-                                // Send the data back
-                                ByteBuffer echo = ByteBuffer.allocate(payloadSize + Short.BYTES);
-                                echo.putShort ((short) payloadSize);
-                                echo.put(packet.array(), packet.position(), payloadSize);
-                                echo.flip();
-                                arbiter.write(echo);
-
-                                // Move to the next data bit
-                                packet.position(packet.position() + payloadSize);
-                            }
-                        }
-                    }
-
-                    iterator.remove();
-                }
-            }
-
-            remoteChannels.close();
-            listener.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
     }
 
 
@@ -759,11 +661,7 @@ public class NetArbiter {
 
         // Launch the arbiter
         NetArbiter arbiter = new NetArbiter(ports[0], ports[1]);
-
-        if (ports[1] != -1)
-            arbiter.startListener();
-        else
-            arbiter.startEndpoint();
+        arbiter.startEndpoint();
     }
 
 }

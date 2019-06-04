@@ -16,6 +16,7 @@ public class Constants {
 
     // Arbiter Responses
     public static final byte ARB_REP_DATA_RECEIVED =    'G';
+    public static final byte ARB_REP_NEW_CONNECTION =   'N';
     public static final byte ARB_REP_REMOTE_CLOSED =    'R';
     public static final byte ARB_REP_CMD_SUCCESSFUL =   'S';
     public static final byte ARB_REP_ERROR =            'W';
