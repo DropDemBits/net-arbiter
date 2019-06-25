@@ -518,11 +518,21 @@ public class NetArbiter {
                             // Readable channel has been given, send to the endpoint
                             SocketChannel remote = (SocketChannel) key.channel();
 
+                            // Limit the amount of payload bytes processed
+                            // Done to prevent one connection from hogging all of the processing time
+                            int channelQuota = 0;
+
+                            // Fetch any buffered data
                             packetData.clear();
                             int len = remote.read(packetData);
                             packetData.flip();
 
+                            // Process as many buffered packets as possible
                             while (packetData.hasRemaining()) {
+                                // Stop reading from this channel if it's gone over it's quota
+                                if (channelQuota >= 16384)
+                                    break;
+
                                 packetData.mark();
 
                                 // Check if the remote connection has closed
@@ -553,6 +563,9 @@ public class NetArbiter {
                                 endpoint.write(payload);
 
                                 packetData.position(packetData.position() + payloadSize);
+
+                                // Update the channel quota
+                                channelQuota += payloadSize;
                             }
 
                             if (len == -1) {
