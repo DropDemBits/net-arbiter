@@ -78,6 +78,9 @@ module pervasive NetArbiter
     % Invalid response given
     const pervasive ARB_ERROR_INVALID_RESPONSE : int := -4
     
+    % Unable to start arbiter process
+    const pervasive ARB_ERROR_STARUP_FAILED : int := -5
+    
     
     %% Constants %%
     const pervasive ITOHX : array 0 .. 15 of nat1 := init (
@@ -97,18 +100,21 @@ module pervasive NetArbiter
         label ARB_ERROR_ALREADY_RUNNING:        result "Already Running"
         label ARB_ERROR_INVALID_ARG:            result "Invalid Argument"
         label ARB_ERROR_INVALID_RESPONSE:       result "Invalid Arbiter Response"
+        label ARB_ERROR_STARUP_FAILED:          result "Process Startup Failed"
         label :                                 result "Unknown error"
         end case
     end errorToString
     
     % Main net arbiter code
     class Arbiter
+        import Sys
         export startup, shutdown, connectTo, disconnect, poll, getPacket, nextPacket, writePacket, getError
         %% Normal constants %%
         const ARB_RESPONSE_NEW_CONNECTION : nat1    := ord ('N')
         const ARB_RESPONSE_CONNECTION_CLOSED : nat1 := ord ('R')
         const ARB_RESPONSE_ERROR : nat1             := ord ('W')
         const ARB_RESPONSE_COMMAND_SUCCESS : nat1   := ord ('S')
+        
         
         %% Stateful variables %%
         % Current run state of the arbiter
@@ -300,6 +306,8 @@ module pervasive NetArbiter
         *   A connection to the arbiter or remote arbiter was refused
         * ARB_ERROR_INVALID_ARG:
         *   An invalid argument was given
+        * ARB_ERROR_STARUP_FAILED:
+        *   An error was encountered while starting up the arbiter process
         */
         fcn getError () : int
             result errno
@@ -579,12 +587,12 @@ module pervasive NetArbiter
             
             % Launch the arbiter process
             put "Starting arbiter with command: \"", realCommand, '"'
-            var retcode : int
-            system (realCommand, retcode)
             
-            if retcode not= 0 then
-                % Error in starting the net arbiter process (replace w/ appropriate error)
-                errno := ARB_ERROR_CONNECTION_REFUSED
+            if not Sys.Exec (realCommand) then
+                % Error in starting the net arbiter process
+                % Note: "Error.Last" contains more information about the
+                % specific error
+                errno := ARB_ERROR_STARUP_FAILED
                 return
             end if
             
