@@ -30,6 +30,12 @@ import static ddb.io.netarbiter.Constants.*;
  * V Listener - Endpoint interface:
  *  V New Connection
  *  V Connection Closed by Remote
+ * - Properly handle exceptions
+ * - Keep-alive for remote connections
+ * - Timeout for connecting
+ *
+ * Optimizations
+ * - Reduce number of heap allocations
  */
 public class NetArbiter {
 
@@ -410,7 +416,9 @@ public class NetArbiter {
             // Endpoint listener no longer needed
             endpointListener.close();
         } catch (IOException e) {
+            System.out.println("Error in connecting to endpoint");
             e.printStackTrace();
+            endpoint = null;
         }
 
         // Done to satisfy any warnings
@@ -662,6 +670,13 @@ public class NetArbiter {
         // Launch the arbiter
         NetArbiter arbiter = new NetArbiter(ports[0], ports[1]);
         arbiter.startEndpoint();
+
+        try {
+            System.out.println("Press any key to continue");
+            System.in.read();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
 }

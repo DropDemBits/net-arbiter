@@ -5,13 +5,65 @@ module pervasive NetArbiter
     export ~. var Arbiter, ~. Packet, errorToString
     
     %% Types %%%
-    type pervasive Packet :
-    record
-        connID : nat2
-        size : nat2
-        bytes : addressint
-        next : ^Packet
-    end record
+    % Representation of a packet
+    class pervasive Packet
+        export
+            % Exportable constants
+            % size, isCmdResponse is modified by 'expand'
+            var connID, var next, size, isCmdResponse,
+            % Payload helpers
+            getPayload, expand, cleanup
+        
+        % Packet data
+        var connID : nat2 := 0
+        var size : nat2 := 0
+        var bytes : flexible array 1 .. 0 of nat1
+        var isCmdResponse : boolean := false
+        var next : ^Packet := nil
+        
+        /**
+        * Gets the address of the payload data
+        */
+        fcn getPayload () : addressint
+            result addr (bytes)
+        end getPayload
+        
+        /**
+        * Alters the size of the payload
+        * Doesn't allow for the shrinkage of the payload size
+        *
+        * If the newSize is equal to 16#FFFFFFFF, then the packet is a command
+        * response
+        */
+        proc expand (newSize : nat4)
+            if newSize = 16#FFFFFFFF then
+                % Packet is a command response
+                isCmdResponse := true
+                
+                % Setup the thing
+                size := 1
+                new bytes, 1
+                
+                % Done
+                return
+            elsif newSize < size then
+                return
+            end if
+            
+            % Packet is a normal response
+            isCmdResponse := false
+        
+            size := newSize
+            new bytes, newSize
+        end expand
+        
+        /**
+        * Cleans up data related to the packet
+        */
+        proc cleanup ()
+            free bytes
+        end cleanup
+    end Packet
     
     
     %% Error Codes %%
@@ -154,14 +206,15 @@ module pervasive NetArbiter
                 new packet
                 
                 packet -> connID := cheat (nat2, connID)
-                packet -> size := cheat (nat2, 0)
                 packet -> next := nil
+                % Indicate that it's a response
+                packet -> expand (16#FFFFFFFF)
                 
                 % Select the appropriate data pointer
                 if responseID = 'N' then
-                    packet -> bytes := cheat (nat1, ARB_RESPONSE_NEW_CONNECTION)
+                    nat1 @ (packet -> getPayload ()) := cheat (nat1, ARB_RESPONSE_NEW_CONNECTION)
                 else
-                    packet -> bytes := cheat (nat1, ARB_RESPONSE_CONNECTION_CLOSED)
+                    nat1 @ (packet -> getPayload ())  := cheat (nat1, ARB_RESPONSE_CONNECTION_CLOSED)
                 end if
                 
                 % Append to packet list
@@ -203,18 +256,24 @@ module pervasive NetArbiter
                 return
             end if
             
-            % Read in the payload
-            var payload : array 1 .. payloadSize of nat1
-            read : netFD, payload : payloadSize
-            
             % Build the packet data
             var packet : ^Packet
             new packet
             
             packet -> connID := cheat (nat2, connID)
-            packet -> size := cheat (nat2, payloadSize)
-            packet -> bytes := addr (payload)
             packet -> next := nil
+            
+            % Copy the payload data
+            packet -> expand (cheat (nat2, payloadSize))
+            
+            % Read in the payload
+            var payload : array 1 .. payloadSize of nat1
+            read : netFD, payload : payloadSize
+            
+            for i : 0 .. payloadSize - 1
+                nat1 @ (packet -> getPayload () + i) := payload (i + 1)
+            end for
+            
             
             % Append to packet list
             if pendingPackets = nil then
@@ -305,6 +364,7 @@ module pervasive NetArbiter
             pendingPackets := pendingPackets -> next
             
             % Done with the packet
+            packet -> cleanup ()
             free packet
             
             if pendingPackets = nil then
@@ -346,10 +406,10 @@ module pervasive NetArbiter
                 arbData (9 + i) := byteData (i)
             end for
             
-            for i : 1 .. packetLength
+            /*for i : 1 .. packetLength
                 put chr(arbData (i)) ..
             end for
-            put ""
+            put ""*/
             
             % Send the packet
             write : netFD, arbData : packetLength
@@ -505,6 +565,32 @@ module pervasive NetArbiter
             end if
         
             % TODO: Start the net arbiter process
+            const CMD_STRING : string := "java -cp ../out/production/turing-net-arbiter ddb.io.netarbiter.NetArbiter"
+            
+            % Build the command string
+            var realCommand : string := ""
+            realCommand += CMD_STRING
+            realCommand += " --endpointPort=" + natstr(arbiterPort)
+            
+            if listenPort not= 0 then
+                % Append optional listening port
+                realCommand += " --listenPort=" + natstr(listenPort)
+            end if
+            
+            % Launch the arbiter process
+            put "Starting arbiter with command: \"", realCommand, '"'
+            var retcode : int
+            system (realCommand, retcode)
+            
+            if retcode not= 0 then
+                % Error in starting the net arbiter process (replace w/ appropriate error)
+                errno := ARB_ERROR_CONNECTION_REFUSED
+                return
+            end if
+            
+            % Wait for a bit to allow the arbiter to initialize
+            delay (100)
+            
             % Connect to the net arbiter
             netFD := Net.OpenConnectionBinary ("localhost", arbiterPort)
             
@@ -537,6 +623,8 @@ module pervasive NetArbiter
                 % Advance to the next packet & free the current one
                 var packet : ^Packet := nextPacket
                 nextPacket := nextPacket -> next
+                
+                packet -> cleanup ()
                 free packet
             end loop
             

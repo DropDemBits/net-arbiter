@@ -2,6 +2,7 @@
 % Tests the functions of the arbiter
 import NetArbiter in "net_arbiter.t"
 
+
 %%% Types & Classes %%%
 monitor class mutex
     export acquire, canAcquire, release
@@ -54,6 +55,14 @@ process EndpointTest ()
     var arb : ^ Arbiter
     var winID : int
     
+    % Statistics
+    var sendTime, sendCycles : nat4 := 0
+    var recvTime, recvCycles : nat4 := 0
+    var recvPeriod : nat4 := 0
+    
+    var recvTimer : nat4 := Time.Elapsed
+    var recvCounter : nat4 := 0
+    
     new Arbiter, arb
     
     % Get usage port
@@ -62,7 +71,13 @@ process EndpointTest ()
     basePort += 1
     portLock -> release ()
     
-    winID := Window.Open ("graphics;title:Arbiter " + intstr(ourPort - 7007))
+    var endpointInstance : int := ourPort - 7007
+    if endpointInstance = 0 then
+        winID := Window.Open ("graphics;title:Arbiter " + intstr(endpointInstance) + ";position:left;top")
+    else
+        winID := Window.Open ("graphics;title:Arbiter " + intstr(endpointInstance) + ";position:right;top")
+    end if
+    
     Window.Select (winID)
     
     put "Starting arbiter"
@@ -70,6 +85,10 @@ process EndpointTest ()
     if arb -> getError () not= 0 then
         put "Error occured (", NetArbiter.errorToString (arb -> getError ()), ")"
         cleanUp (arb)
+        
+        delay (1000)
+        Window.Close (winID)
+        shouldRun := false
         return
     end if
     
@@ -78,7 +97,7 @@ process EndpointTest ()
     connID := arb -> connectTo ("localhost", 8087)
     
     if connID >= 0 then
-        put "Connected to remote arbiter #", connID
+        put "Connected to remote arbiter (CID: ", connID, ")"
     else
         put "Error occured (", NetArbiter.errorToString (arb -> getError ()), ")"
         arb -> shutdown ()
@@ -95,38 +114,78 @@ process EndpointTest ()
         data (i) := ord (TEST_STRING (i))
     end for
     
+    % Keep track of recieve interval
+    var recvStart : int := Time.Elapsed
+    
     loop
         exit when not shouldRun
         
+        % Send test data
+        var sendStart : int := Time.Elapsed
         len := arb -> writePacket (connID, data)
-        len := arb -> writePacket (connID, data)
-        
+        sendTime += Time.Elapsed - sendStart
+        sendCycles += 1
+    
         %% Receive the echo'd data %%
-        var recvStart : int := Time.Elapsed
-        loop
-            exit when arb -> poll()
-        end loop
-        %put "Sent -> Recv: ", Time.Elapsed - recvStart
-        
-        loop
-            var packet : ^Packet := arb -> getPacket ()
-            exit when packet = nil or not shouldRun
-            
-            if packet -> size > 0 then
-                % Put the data onto the screen
-                /*put ourPort - 7007, " " ..
-                put packet -> connID, " "..
-                put packet -> size, " "..
+        if arb -> poll() then
+            loop
+                var packet : ^Packet := arb -> getPacket ()
+                exit when packet = nil or not shouldRun
                 
-                for i : 0 .. packet -> size - 1
-                    put char @ (packet -> bytes + i) ..
-                end for
-                put ""*/
-            end if
+                if not packet -> isCmdResponse then
+                    % Put the data onto the screen
+                    locate (8, 1)
+                    put "A", ourPort - 7007,   " " ..
+                    put "C", packet -> connID, " "..
+                    put "S", packet -> size,   " "..
+                    
+                    for i : 0 .. packet -> size - 1
+                        put char @ (packet -> getPayload () + i) ..
+                    end for
+                end if
+                
+                recvCounter += 1
+                
+                % Stop once there's no more packets to process
+                exit when not arb -> nextPacket ()
+            end loop
             
-            exit when not arb -> nextPacket ()
-        end loop
+            % Update statistics
+            recvPeriod := Time.Elapsed - recvStart
+            recvTime += recvPeriod
+            recvCycles += 1
+            recvStart := Time.Elapsed
+        end if
         
+        % Print statistics
+        locate (maxrow - 2, 1)
+        put "Period: ", recvPeriod, " ms"
+        
+        if sendCycles > 0 then
+            locate (maxrow - 1, 1)
+            var frq : real := (sendTime / sendCycles)
+            
+            if frq > 0 then
+                put "Send: ", 1000 / frq, " p/s"
+            end if
+        end if
+        
+        if recvCycles > 0 then
+            locate (maxrow - 0, 1)
+            var period : real := (recvTime / recvCycles)
+            
+            put "AvgPeriod: ", period, " ms" ..
+        end if
+        
+        if Time.Elapsed - recvTimer > 1000 then
+            locate (maxrow - 0, maxcol div 2)
+            put "RecvAmt: ", recvCounter ..
+            
+            recvCounter := 0
+            recvTimer := Time.Elapsed
+        end if
+        
+        Time.DelaySinceLast (2)
     end loop
     
     %% Disconnect %%
@@ -140,9 +199,9 @@ process EndpointTest ()
 end EndpointTest
 
 process ListenerTest ()
-    var ourPort : int := 6060
+    var ourPort : int := 8888
     var arb : ^ Arbiter
-    var winID : int := Window.Open ("graphics;title:Arbiter Listener")
+    var winID : int := Window.Open ("graphics;title:Arbiter Listener;position:center;bottom")
     Window.Select (winID)
     
     new Arbiter, arb
@@ -153,6 +212,10 @@ process ListenerTest ()
     if arb -> getError () not= 0 then
         put "Error occured (", NetArbiter.errorToString (arb -> getError ()), ")"
         cleanUp (arb)
+        
+        delay (1000)
+        Window.Close (winID)
+        shouldRun := false
         return
     end if
     
@@ -166,14 +229,15 @@ process ListenerTest ()
                 var packet : ^Packet := arb -> getPacket ()
                 exit when packet = nil or not shouldRun
                 
-                if packet -> size > 0 then
+                if not packet -> isCmdResponse then
                     % Incoming Data
                     % Put the data onto the screen
+                    locate (8 + packet -> connID, 1)
                     put packet -> connID, " "..
                     put packet -> size, " "..
                     
                     for i : 0 .. packet -> size - 1
-                        put char @ (packet -> bytes + i) ..
+                        put char @ (packet -> getPayload() + i) ..
                     end for
                     put ""
                     
@@ -192,8 +256,10 @@ process ListenerTest ()
                     var dmy := arb -> writePacket (packet -> connID, data)
                 else
                     % Special: New Connection or Remote Disconnect
-                    var specialType : char := chr (cheat (nat1, packet -> bytes))
+                    % Get response code
+                    var specialType : char := char @ (packet -> getPayload())
                     
+                    locate (12 + packet -> connID, 1)
                     case specialType of
                     label 'N':  put "New connection (#", packet -> connID, ")"
                     label 'R':  put "Connection closed (#", packet -> connID, ")"
@@ -218,7 +284,7 @@ new portLock
 put "hai"
 fork ListenerTest ()
 put "hop"
-delay (1000)
+delay (2000)
 put "bam"
 for i : 1 .. 2
     fork EndpointTest ()
