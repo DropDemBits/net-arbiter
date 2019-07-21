@@ -132,17 +132,15 @@ process EndpointTest ()
                 var packet : ^Packet := arb -> getPacket ()
                 exit when packet = nil or not shouldRun
                 
-                if not packet -> isCmdResponse then
-                    % Put the data onto the screen
-                    locate (8, 1)
-                    put "A", ourPort - 7007,   " " ..
-                    put "C", packet -> connID, " "..
-                    put "S", packet -> size,   " "..
-                    
-                    for i : 0 .. packet -> size - 1
-                        put char @ (packet -> getPayload () + i) ..
-                    end for
-                end if
+                % Put the data onto the screen
+                locate (8, 1)
+                put "A", ourPort - 7007,   " " ..
+                put "C", packet -> connID, " "..
+                put "S", packet -> size,   " "..
+                
+                for i : 0 .. packet -> size - 1
+                    put char @ (packet -> getPayload () + i) ..
+                end for
                 
                 recvCounter += 1
                 
@@ -224,48 +222,50 @@ process ListenerTest ()
         
         % Check for incoming data
         if arb -> poll() then
+            % Process the status updates first
+            loop
+                var status : ^ConnectionStatus := arb -> getStatus()
+                exit when status = nil or not shouldRun
+                
+                locate (12 + status -> connID, 1)
+                case status -> statusType of
+                label STATUS_NEW:           put "New connection (#", status -> connID, ")"
+                label STATUS_DISCONNECT:    put "Connection closed (#", status -> connID, ")"
+                label:      put "Unknown type (", status -> statusType, ")"
+                end case
+                
+                exit when not arb -> nextStatus()
+            end loop
+        
             % Process all of the packets
             loop
                 var packet : ^Packet := arb -> getPacket ()
                 exit when packet = nil or not shouldRun
                 
-                if not packet -> isCmdResponse then
-                    % Incoming Data
-                    % Put the data onto the screen
-                    locate (8 + packet -> connID, 1)
-                    put packet -> connID, " "..
-                    put packet -> size, " "..
-                    
-                    for i : 0 .. packet -> size - 1
-                        put char @ (packet -> getPayload() + i) ..
-                    end for
-                    put ""
-                    
-                    % Write back some data
-                    var sendBack : string := ""
-                    sendBack += "hello, #"
-                    sendBack += intstr (packet -> connID)
-                    sendBack += "\n"
-                    
-                    % Build the packet data
-                    var data : array 1 .. length (sendBack) of nat1
-                    for i : 1 .. upper (data)
-                        data(i) := ord (sendBack (i))
-                    end for
-                    
-                    var dmy := arb -> writePacket (packet -> connID, data)
-                else
-                    % Special: New Connection or Remote Disconnect
-                    % Get response code
-                    var specialType : char := char @ (packet -> getPayload())
-                    
-                    locate (12 + packet -> connID, 1)
-                    case specialType of
-                    label 'N':  put "New connection (#", packet -> connID, ")"
-                    label 'R':  put "Connection closed (#", packet -> connID, ")"
-                    label:      put "Unknown type (", specialType, ")"
-                    end case
-                end if
+                % Incoming Data
+                % Put the data onto the screen
+                locate (8 + packet -> connID, 1)
+                put packet -> connID, " "..
+                put packet -> size, " "..
+                
+                for i : 0 .. packet -> size - 1
+                    put char @ (packet -> getPayload() + i) ..
+                end for
+                put ""
+                
+                % Write back some data
+                var sendBack : string := ""
+                sendBack += "hello, #"
+                sendBack += intstr (packet -> connID)
+                sendBack += "\n"
+                
+                % Build the packet data
+                var data : array 1 .. length (sendBack) of nat1
+                for i : 1 .. upper (data)
+                    data(i) := ord (sendBack (i))
+                end for
+                
+                var dmy := arb -> writePacket (packet -> connID, data)
                 
                 exit when not arb -> nextPacket ()
             end loop

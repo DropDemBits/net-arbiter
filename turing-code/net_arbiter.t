@@ -2,15 +2,26 @@
 % Interface to the Java Net Arbiter
 unit
 module pervasive NetArbiter
-    export ~. var Arbiter, ~. Packet, errorToString
+    export 
+        % Constants
+        ~. ARB_ERROR_NO_ERROR,
+        ~. ARB_ERROR_ALREADY_RUNNING,
+        ~. ARB_ERROR_CONNECTION_REFUSED,
+        ~. ARB_ERROR_INVALID_ARG,
+        ~. ARB_ERROR_INVALID_RESPONSE,
+        ~. ARB_ERROR_STARUP_FAILED,
+        ~. STATUS_NEW,
+        ~. STATUS_DISCONNECT,
+        % Structures
+        ~. var Arbiter, ~. Packet, ~. ConnectionStatus, errorToString
     
     %% Types %%%
     % Representation of a packet
     class pervasive Packet
         export
             % Exportable constants
-            % size, isCmdResponse is modified by 'expand'
-            var connID, var next, size, isCmdResponse,
+            % size is modified by 'expand'
+            var connID, var next, size,
             % Payload helpers
             getPayload, expand, cleanup
         
@@ -18,7 +29,6 @@ module pervasive NetArbiter
         var connID : nat2 := 0
         var size : nat2 := 0
         var bytes : flexible array 1 .. 0 of nat1
-        var isCmdResponse : boolean := false
         var next : ^Packet := nil
         
         /**
@@ -31,27 +41,11 @@ module pervasive NetArbiter
         /**
         * Alters the size of the payload
         * Doesn't allow for the shrinkage of the payload size
-        *
-        * If the newSize is equal to 16#FFFFFFFF, then the packet is a command
-        * response
         */
         proc expand (newSize : nat4)
-            if newSize = 16#FFFFFFFF then
-                % Packet is a command response
-                isCmdResponse := true
-                
-                % Setup the thing
-                size := 1
-                new bytes, 1
-                
-                % Done
-                return
-            elsif newSize < size then
+            if newSize < size then
                 return
             end if
-            
-            % Packet is a normal response
-            isCmdResponse := false
         
             size := newSize
             new bytes, newSize
@@ -64,6 +58,20 @@ module pervasive NetArbiter
             free bytes
         end cleanup
     end Packet
+    
+    /**
+    * Special packet that's used to indicate a connection change
+    * Used for indication of new connections and disconnects
+    */
+    type pervasive ConnectionStatus :
+        record    
+            % Status indication of the packet
+            statusType : int
+            % Connection ID associated with the status update
+            connID : int
+            % Pointer to the next status update
+            next : ^ConnectionStatus
+        end record
     
     
     %% Error Codes %%
@@ -90,6 +98,10 @@ module pervasive NetArbiter
         ord ('C'), ord ('D'), ord ('E'), ord ('F')
     )
     
+    % Status update for the ConnectionStatus structure
+    const pervasive STATUS_NEW : int := 0
+    const pervasive STATUS_DISCONNECT : int := 1
+    
     /**
     * Converts an errno into a string
     */
@@ -108,7 +120,9 @@ module pervasive NetArbiter
     % Main net arbiter code
     class Arbiter
         import Sys
-        export startup, shutdown, connectTo, disconnect, poll, getPacket, nextPacket, writePacket, getError
+        export startup, shutdown, connectTo, disconnect, poll,
+            getPacket, nextPacket, getStatus, nextStatus, writePacket, getError
+            
         %% Normal constants %%
         const ARB_RESPONSE_NEW_CONNECTION : nat1    := ord ('N')
         const ARB_RESPONSE_CONNECTION_CLOSED : nat1 := ord ('R')
@@ -129,6 +143,10 @@ module pervasive NetArbiter
         % List of pending packets
         var pendingPackets : ^Packet := nil
         var pendingPacketsTail : ^Packet := nil
+        
+        % List of pending connection status updates
+        var pendingStatus : ^ConnectionStatus := nil
+        var pendingStatusTail : ^ConnectionStatus := nil
         
         %% Asynchronous Dealsies %%
         % Is there a command being currently processed
@@ -207,31 +225,29 @@ module pervasive NetArbiter
                 var connID : nat2
                 connID := strint (paramResponse, 16)
                 
-                % Build the response data
-                var packet : ^Packet
-                new packet
+                % Build the connection status data
+                var status : ^ConnectionStatus
+                new status
                 
-                packet -> connID := cheat (nat2, connID)
-                packet -> next := nil
-                % Indicate that it's a response
-                packet -> expand (16#FFFFFFFF)
+                status -> connID := cheat (nat2, connID)
+                status -> next := nil
                 
-                % Select the appropriate data pointer
+                % Select the appropriate status
                 if responseID = 'N' then
-                    nat1 @ (packet -> getPayload ()) := cheat (nat1, ARB_RESPONSE_NEW_CONNECTION)
+                    status -> statusType := STATUS_NEW
                 else
-                    nat1 @ (packet -> getPayload ())  := cheat (nat1, ARB_RESPONSE_CONNECTION_CLOSED)
+                    status -> statusType := STATUS_DISCONNECT
                 end if
                 
-                % Append to packet list
-                if pendingPackets = nil then
+                % Append to status update list
+                if pendingStatus = nil then
                     % Empty queue
-                    pendingPackets := packet
-                    pendingPacketsTail := packet
+                    pendingStatus := status
+                    pendingStatusTail := status
                 else
                     % List with things in it
-                    pendingPacketsTail -> next := packet
-                    pendingPacketsTail := packet
+                    pendingStatusTail -> next := status
+                    pendingStatusTail := status
                 end if
             label :
                 errno := ARB_ERROR_INVALID_RESPONSE
@@ -355,7 +371,8 @@ module pervasive NetArbiter
         end getPacket
         
         /**
-        * Pops the given packet from the current queue
+        * Pops the given packet from the current queue and moves on to the next
+        * one
         *
         * Returns:
         * True if there is more packets to process, false otherwise
@@ -384,6 +401,44 @@ module pervasive NetArbiter
             % More packets to process
             result true
         end nextPacket
+        
+        /**
+        * Gets the most recent connection status update in the queue
+        */
+        fcn getStatus () : ^ConnectionStatus
+            result pendingStatus
+        end getStatus
+        
+        /**
+        * Pops the current update from the current queue and moves on to the
+        * next one
+        *
+        * Returns:
+        * True if there is more updates to process, false otherwise
+        */
+        fcn nextStatus () : boolean
+            if pendingStatus = nil then
+                % Nothing inside of the queue
+                result false
+            end if
+        
+            var status : ^ConnectionStatus := pendingStatus
+            
+            % Advance the queue
+            pendingStatus := pendingStatus -> next
+            
+            % Done with the status update
+            free status
+            
+            if pendingStatus = nil then
+                % Queue is empty
+                pendingStatusTail := nil
+                result false
+            end if
+            
+            % More status updates to process
+            result true
+        end nextStatus
         
         /**
         * Sends data to a remote connection
