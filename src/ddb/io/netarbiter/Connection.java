@@ -79,7 +79,8 @@ public abstract class Connection
      */
     public boolean isDead()
     {
-        return false;//(System.currentTimeMillis() - lastHeartbeat) > ARREST_TIMER;
+        return (System.currentTimeMillis() - lastHeartbeat) > ARREST_TIMER;
+        //return false;
     }
 
 }

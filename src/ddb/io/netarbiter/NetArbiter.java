@@ -199,8 +199,23 @@ public class NetArbiter {
             if (packetLength == 0)
                 continue;
 
+            ByteBuffer processBuffer;
+
+            // Allocate a bigger buffer if the current one can't hold the data
+            if (readBuffer.capacity() < (packetLength - 2))
+            {
+                readBuffer.position(readBuffer.position() - 2);
+                readBuffer.compact();
+                readBuffer.flip();
+
+                processBuffer = ByteBuffer.allocate(packetLength);
+                processBuffer.put(readBuffer);
+                channel.read(processBuffer);
+                processBuffer.flip();
+                processBuffer.position(2);
+            }
             // Fetch the rest of the packet if there's not enough data
-            if (readBuffer.remaining() < (packetLength - 2))
+            else if (readBuffer.remaining() < (packetLength - 2))
             {
                 // Read in the remaining packet
                 readBuffer.position(readBuffer.position() - 2);
@@ -209,18 +224,24 @@ public class NetArbiter {
                 channel.read(readBuffer);
                 assert (!readBuffer.hasRemaining());
                 readBuffer.flip();
+                processBuffer = readBuffer;
+            }
+            else {
+                processBuffer = readBuffer;
             }
 
             // Copy the entire packet
             byte[] data = new byte[packetLength];
-            readBuffer.position(readBuffer.position() - 2);
-            readBuffer.get(data);
+            processBuffer.position(processBuffer.position() - 2);
+            processBuffer.get(data);
 
             Packet packet = PacketParser.parsePacket(data);
 
             // Enqueue the command if the current connection is a write
             if (packet instanceof CommandPacket && connection instanceof CommandConnection)
                 commandQueue.add((CommandPacket)packet);
+            else if (packet instanceof ResponsePacket)
+                connection.enqueueResponse((ResponsePacket) packet);
         }
 
         // Update the heartbeat
@@ -288,6 +309,48 @@ public class NetArbiter {
                     assert (!writeBuffer.hasRemaining());
                     writeBuffer.clear();
 
+                    while (!connection.responseQueue.isEmpty())
+                    {
+                        // Process all of the response packets (remote -> command or arbiter -> command)
+                        // Forward the responses to the command connection
+
+                        // Clump as many responses as possible (for TCP connections)
+                        ResponsePacket packet = connection.responseQueue.remove();
+                        byte[] payload = packet.getPayload();
+
+                        int dataLen = payload.length + Short.BYTES + 5;
+
+                        if (writeBuffer.remaining() < dataLen)
+                        {
+                            // Send the current data out
+                            writeBuffer.flip();
+                            cmdConnection.channel.write(writeBuffer);
+                            writeBuffer.clear();
+                        }
+
+                        // Length
+                        writeBuffer.putShort((short) dataLen);
+                        // Sequence (ignored)
+                        writeBuffer.putShort((short) 0);
+                        // PacketID (varies)
+                        writeBuffer.put(packet.responseID);
+                        // Source connection
+                        // 0xFFFF/-1 means arbiter origin / command response
+                        writeBuffer.putShort(connection.getConnectionID());
+                        // Response data
+                        writeBuffer.put(packet.responseData);
+
+                        // If the queue will be empty, write out the remaining packets
+                        if (connection.responseQueue.isEmpty())
+                        {
+                            writeBuffer.flip();
+                            cmdConnection.channel.write(writeBuffer);
+                        }
+                    }
+
+                    assert (!writeBuffer.hasRemaining());
+                    writeBuffer.clear();
+
                     while (!connection.writeQueue.isEmpty())
                     {
                         // Process all of the write packets (command -> remote)
@@ -343,47 +406,6 @@ public class NetArbiter {
                         {
                             writeBuffer.flip();
                             connection.channel.write(writeBuffer);
-                        }
-                    }
-
-                    assert (!writeBuffer.hasRemaining());
-                    writeBuffer.clear();
-
-                    while (!connection.responseQueue.isEmpty())
-                    {
-                        // Process all of the response packets (remote -> command or arbiter -> command)
-                        // Forward the responses to the command connection
-
-                        // Clump as many responses as possible (for TCP connections)
-                        ResponsePacket packet = connection.responseQueue.remove();
-
-                        int dataLen = Integer.BYTES + Short.BYTES + 5;
-
-                        if (writeBuffer.remaining() < dataLen)
-                        {
-                            // Send the current data out
-                            writeBuffer.flip();
-                            cmdConnection.channel.write(writeBuffer);
-                            writeBuffer.clear();
-                        }
-
-                        // Length
-                        writeBuffer.putShort((short) dataLen);
-                        // Sequence (ignored)
-                        writeBuffer.putShort((short) 0);
-                        // PacketID ('E')
-                        writeBuffer.put((byte) 'E');
-                        // Source connection
-                        // 0xFFFF/-1 means arbiter origin / command response
-                        writeBuffer.putShort(connection.getConnectionID());
-                        // Response code
-                        writeBuffer.putInt(packet.responseCode);
-
-                        // If the queue will be empty, write out the remaining packets
-                        if (connection.writeQueue.isEmpty())
-                        {
-                            writeBuffer.flip();
-                            cmdConnection.channel.write(writeBuffer);
                         }
                     }
                 }

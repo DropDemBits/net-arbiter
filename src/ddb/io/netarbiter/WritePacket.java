@@ -20,7 +20,7 @@ import java.util.Arrays;
  */
 public class WritePacket extends CommandPacket
 {
-    private int connID;
+    private short connID;
     private byte[] payload;
 
     public WritePacket(int packetSequence)
@@ -36,7 +36,7 @@ public class WritePacket extends CommandPacket
     @Override
     public boolean parsePayload(byte[] payload)
     {
-        this.connID = (Byte.toUnsignedInt(payload[0]) << 8) | Byte.toUnsignedInt(payload[1]);
+        this.connID = (short) ((Byte.toUnsignedInt(payload[0]) << 8) | Byte.toUnsignedInt(payload[1]));
         this.payload = Arrays.copyOfRange(payload, 2, payload.length);
 
         return true;
@@ -50,12 +50,12 @@ public class WritePacket extends CommandPacket
 
         // Return an error code for the response
         if (connection == null)
-            return new ResponsePacket(this.sequence, -1);
+            return new ResponsePacket(this.sequence, (byte) 'E', -1);
 
         // Enqueue the write with the appropriate connection
         connection.enqueueWrite(this);
         // Return a command success
-        return new ResponsePacket(this.sequence, 0);
+        return new ResponsePacket(this.sequence, (byte) 'E', 0);
     }
 
 }
