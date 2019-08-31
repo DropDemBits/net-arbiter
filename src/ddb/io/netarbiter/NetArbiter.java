@@ -1,12 +1,11 @@
 package ddb.io.netarbiter;
 
 import java.io.*;
+import java.net.ConnectException;
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.*;
 import java.util.*;
 import java.util.concurrent.LinkedBlockingDeque;
 
@@ -47,7 +46,9 @@ public class NetArbiter {
 
     boolean isRunning = true;
     private int endpointPort, listenPort;
-    private CommandConnection cmdConnection;
+    private Connection cmdConnection;
+    private static final byte[] CLIENT_MAGIC = new byte[] { (byte) 0xAB, (byte) 0x1C };
+    private static final byte[] SERVER_MAGIC = new byte[] { (byte) 0xCA, (byte) 0xC0 };
 
     private NetArbiter(int endpoint, int listen) {
         this.endpointPort = endpoint;
@@ -63,6 +64,7 @@ public class NetArbiter {
     private Stack<Integer> freeRemoteIDs;
     private int nextRemoteID = 0;
     private Selector channels;
+    private ServerSocketChannel endpointServer;
     private ServerSocketChannel arbiterServer;
 
     private int allocateID(boolean isCommand)
@@ -97,10 +99,10 @@ public class NetArbiter {
 
     /**
      * Adds a connection and registers it with the channel selector
-     * @param connection
-     * @param channel
-     * @return
-     * @throws IOException
+     * @param connection The connection to add
+     * @param channel The connection's associated channel
+     * @return The connection id of the new connection
+     * @throws IOException If the channel couldn't be made unblocking
      */
     public int addConnection(Connection connection, SocketChannel channel) throws IOException
     {
@@ -113,13 +115,68 @@ public class NetArbiter {
         // Update the heartbeat to now
         connection.updateHeartbeat();
 
-        return 0;
+        return connection.getConnectionID();
     }
 
     public int addConnection(String hostname, int port)
     {
-        System.out.println("Connection add:" + hostname + ":" + port);
-        return 0;
+        System.out.println("Connection add " + hostname + ":" + port);
+
+        try
+        {
+            // Connect to the remote host
+            SocketAddress remoteAddr = new InetSocketAddress(hostname, port);
+            SocketChannel channel = SocketChannel.open();
+            channel.connect(remoteAddr);
+
+            final ByteBuffer temp = ByteBuffer.allocateDirect(2);
+            final byte[] readBytes = new byte[2];
+            
+            temp.clear();
+            temp.put(CLIENT_MAGIC);
+            temp.flip();
+
+            // Send out the client magic
+            channel.configureBlocking(true);
+            channel.write(temp);
+            
+            // Expect the server magic back
+            temp.flip();
+            channel.read(temp);
+            channel.configureBlocking(false);
+            temp.flip();
+            temp.get(readBytes);
+
+            /*System.out.println("HEY SSIG");
+            dumpBytes(readBytes);*/
+
+            if (!Arrays.equals(readBytes, SERVER_MAGIC))
+            {
+                // Bad server magic
+                return Constants.ARB_ERROR_CONNECT_REFUSED;
+            }
+            
+            // Connection finalized, add to active connections
+            return addConnection(new Connection((short)allocateID(false), channel), channel);
+        }
+        catch (UnresolvedAddressException e)
+        {
+            e.printStackTrace();
+            // Unresolved address
+            return Constants.ARB_ERROR_BAD_ADDRESS;
+        }
+        catch (ConnectException | ClosedChannelException e)
+        {
+            e.printStackTrace();
+            // Connection Refused
+            return Constants.ARB_ERROR_CONNECT_REFUSED;
+        }
+        catch (IOException e)
+        {
+            // Unknown error
+            e.printStackTrace();
+            return Constants.ARB_ERROR_UNKNOWN_ERROR;
+        }
     }
 
     // ID -> Connection
@@ -136,6 +193,13 @@ public class NetArbiter {
     public int closeConnection(int connID)
     {
         System.out.println("Disconnecting to ...");
+        Connection connection = activeConnections.get(connID);
+        
+        if (connection == null)
+            return Constants.ARB_ERROR_INVALID_ID;
+        
+        // Close the connection
+        connection.closeConnection();
         return 0;
     }
 
@@ -154,8 +218,14 @@ public class NetArbiter {
     /// Arbiter ///
     private void initArbiter() throws IOException
     {
-        arbiterServer = ServerSocketChannel.open();
-        arbiterServer.bind(new InetSocketAddress(endpointPort));
+        endpointServer = ServerSocketChannel.open();
+        endpointServer.bind(new InetSocketAddress(endpointPort));
+
+        if (listenPort != -1)
+        {
+            arbiterServer = ServerSocketChannel.open();
+            arbiterServer.bind(new InetSocketAddress(listenPort));
+        }
     }
 
     private void processPackets(ByteBuffer readBuffer, SocketChannel channel, Connection connection, Queue<CommandPacket> commandQueue) throws IOException
@@ -173,6 +243,7 @@ public class NetArbiter {
         int amt = channel.read(readBuffer);
         if (amt == -1)
         {
+            // Connection has been closed
             connection.closeConnection();
             return;
         }
@@ -238,7 +309,7 @@ public class NetArbiter {
             Packet packet = PacketParser.parsePacket(data);
 
             // Enqueue the command if the current connection is a write
-            if (packet instanceof CommandPacket && connection instanceof CommandConnection)
+            if (packet instanceof CommandPacket && connection.isCommandConnection())
                 commandQueue.add((CommandPacket)packet);
             else if (packet instanceof ResponsePacket)
                 connection.enqueueResponse((ResponsePacket) packet);
@@ -253,14 +324,22 @@ public class NetArbiter {
         System.out.println("Waiting for connections");
 
         channels = Selector.open();
-        SocketChannel endpoint = arbiterServer.accept();
+        SocketChannel endpoint = endpointServer.accept();
         ByteBuffer poke = ByteBuffer.allocateDirect(2);
         ByteBuffer readBuffer = ByteBuffer.allocate(23);
         ByteBuffer writeBuffer = ByteBuffer.allocateDirect(2048);
 
         // Initialize the command connection
-        cmdConnection = new CommandConnection((short)allocateID(true), endpoint);
+        cmdConnection = new Connection((short)allocateID(true), endpoint);
+        cmdConnection.setAsCommandConnection(true);
         addConnection(cmdConnection, endpoint);
+
+        if (listenPort != -1)
+        {
+            // Add the arbiter server
+            arbiterServer.configureBlocking(false);
+            arbiterServer.register(channels, SelectionKey.OP_ACCEPT);
+        }
 
         Queue<CommandPacket> commandQueue = new LinkedBlockingDeque<>();
 
@@ -275,6 +354,8 @@ public class NetArbiter {
                 // \ Connect to a remote host
                 //  \ Perform a connection w/ SocketChannel
                 //  \ Allocate a connection id
+                // \ Perform version handshake
+                //  \ If incompat, fail conn
                 // \ Send back a response
                 //  \ Send back the sequence id with the connID as payload (if success)
                 //  \ Send back the sequence id with the error as payload (if failure)
@@ -289,7 +370,7 @@ public class NetArbiter {
                 //  \ Send back the sequence id with the connID as payload (if success)
                 //  \ Send back the sequence id with the error as payload (if failure)
 
-                // TODO: Execute write command:
+                // Execute write command:
                 // \ Validate connID
                 //  \ If invalid, make command invalid
                 // \ Send the data to the connection (or append on to channel's write queue)
@@ -374,12 +455,13 @@ public class NetArbiter {
                             // Allocate a new temporary buffer
                             ByteBuffer temp = ByteBuffer.allocateDirect(dataLen);
 
+                            // Send out the remote read packet
                             // Length
                             temp.putShort((short) dataLen);
                             // Sequence
                             temp.putShort((short) packet.sequence);
                             // PacketID ('R')
-                            temp.put((byte) 'R');
+                            temp.put(Constants.ARB_PACKET_READ);
                             // Payload
                             temp.put(payload);
 
@@ -397,7 +479,7 @@ public class NetArbiter {
                         // Sequence (ignored)
                         writeBuffer.putShort((short) 0);
                         // PacketID ('R')
-                        writeBuffer.put((byte) 'R');
+                        writeBuffer.put(Constants.ARB_PACKET_READ);
                         // Payload
                         writeBuffer.put(payload);
 
@@ -422,6 +504,13 @@ public class NetArbiter {
                     if(connection.isDead())
                         System.out.println("Connection #" + connection.getConnectionID() + " died, closing");
 
+                    // Alert the endpoint of the connection closure
+                    if (connection.getConnectionID() != -1)
+                    {
+                        ResponsePacket closure = new ResponsePacket(0, Constants.ARB_PACKET_ENDCONN, connection.getConnectionID());
+                        cmdConnection.enqueueResponse(closure);
+                    }
+
                     // Perform cleanup
                     connection.closeConnection();
                     connection.channel.close();
@@ -430,7 +519,7 @@ public class NetArbiter {
                 }
 
                 // Send the heartbeat
-                if (!connection.isClosed() && !(connection instanceof CommandConnection))
+                if (!connection.isClosed() && !connection.isCommandConnection())
                     connection.channel.write(poke);
             }
 
@@ -455,19 +544,57 @@ public class NetArbiter {
             while(iterator.hasNext())
             {
                 SelectionKey key = iterator.next();
-                SocketChannel channel = (SocketChannel) key.channel();
-                Connection connection = (Connection) key.attachment();
 
-                try
+                if (key.isAcceptable())
                 {
-                    if (key.isAcceptable()) /* do a thing */ ;
-                    if (key.isConnectable()) /* do a thing */ ;
-                    if (key.isReadable()) processPackets(readBuffer, channel, connection, commandQueue);
+                    final byte[] readBytes = new byte[2];
+                    SocketChannel channel = ((ServerSocketChannel) key.channel()).accept();
+
+                    // Listen for the client magic
+                    readBuffer.clear();
+                    channel.configureBlocking(true);
+                    channel.read(readBuffer);
+                    readBuffer.flip();
+                    readBuffer.get(readBytes);
+
+                    /*System.out.println("HEY CSIG");
+                    dumpBytes(readBytes);*/
+
+                    if (!Arrays.equals(readBytes, CLIENT_MAGIC))
+                    {
+                        // Refuse the connection & continue
+                        channel.close();
+                        continue;
+                    }
+
+                    // Write back the server magic
+                    writeBuffer.clear();
+                    writeBuffer.put(SERVER_MAGIC);
+                    writeBuffer.flip();
+                    channel.write(writeBuffer);
+                    channel.configureBlocking(false);
+
+                    // Accept the new connection, sending back connID as a response
+                    int connID = addConnection(new Connection((short) allocateID(false), channel), channel);
+                    ResponsePacket response = new ResponsePacket(0, Constants.ARB_PACKET_NEWCONN, connID);
+                    cmdConnection.enqueueResponse(response);
                 }
-                catch (IOException e)
+
+                if (key.isReadable())
                 {
-                    e.printStackTrace();
-                    connection.closeConnection();
+                    // Read packets from the connection
+                    SocketChannel channel = (SocketChannel) key.channel();
+                    Connection connection = (Connection) key.attachment();
+
+                    try
+                    {
+                        processPackets(readBuffer, channel, connection, commandQueue);
+                    }
+                    catch (IOException e)
+                    {
+                        e.printStackTrace();
+                        connection.closeConnection();
+                    }
                 }
 
 
@@ -482,6 +609,7 @@ public class NetArbiter {
         {
             initArbiter();
             processChannels();
+            // TODO: Shutdown remote channels
         }
         catch (Exception e)
         {

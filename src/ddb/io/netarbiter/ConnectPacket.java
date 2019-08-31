@@ -47,6 +47,6 @@ public class ConnectPacket extends CommandPacket
         int response = arbiter.addConnection(hostname, port);
 
         // Response code contains the connection id
-        return new ResponsePacket(this.sequence, (byte) 'E', response);
+        return new ResponsePacket(this.sequence, Constants.ARB_PACKET_ENDCMD, response);
     }
 }

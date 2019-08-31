@@ -39,8 +39,8 @@ public class PacketParser
             case 'W': packet = new WritePacket(packetSequence);      break;
             case 'X': packet = new ExitPacket(packetSequence);       break;
             // Remote packets
-            case 'R': packet = new ResponsePacket(packetSequence, (byte) 'R'); break; // ReadPacket
-            case 'F': packet = new ResponsePacket(packetSequence, (byte) 'F'); break; // StatusNotifyPacket
+            case 'R': packet = new ResponsePacket(packetSequence, Constants.ARB_PACKET_READ); break; // ReadPacket
+            case 'F': packet = new ResponsePacket(packetSequence, Constants.ARB_PACKET_ENDCONN); break; // StatusNotifyPacket
         }
 
         if (packet != null)

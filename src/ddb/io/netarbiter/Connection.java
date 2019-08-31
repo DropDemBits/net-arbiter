@@ -4,11 +4,12 @@ import java.nio.channels.SocketChannel;
 import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
 
-public abstract class Connection
+public class Connection
 {
     // More than 10000ms between heartbeats = dead
     public static final long ARREST_TIMER = 10000;
 
+    private boolean isCommand;
     private boolean isActive;
     private short connID;
     public Queue<WritePacket> writeQueue;
@@ -30,6 +31,16 @@ public abstract class Connection
         this.writeQueue = new LinkedBlockingQueue<>();
         this.responseQueue = new LinkedBlockingQueue<>();
         this.channel = channel;
+    }
+
+    public void setAsCommandConnection(boolean isCommand)
+    {
+        this.isCommand = isCommand;
+    }
+
+    public boolean isCommandConnection()
+    {
+        return isCommand;
     }
 
     public short getConnectionID()
@@ -79,8 +90,8 @@ public abstract class Connection
      */
     public boolean isDead()
     {
-        return (System.currentTimeMillis() - lastHeartbeat) > ARREST_TIMER;
-        //return false;
+        //return (System.currentTimeMillis() - lastHeartbeat) > ARREST_TIMER;
+        return false;
     }
 
 }

@@ -50,12 +50,12 @@ public class WritePacket extends CommandPacket
 
         // Return an error code for the response
         if (connection == null)
-            return new ResponsePacket(this.sequence, (byte) 'E', -1);
+            return new ResponsePacket(this.sequence, Constants.ARB_PACKET_ENDCMD, Constants.ARB_ERROR_INVALID_ID);
 
         // Enqueue the write with the appropriate connection
         connection.enqueueWrite(this);
         // Return a command success
-        return new ResponsePacket(this.sequence, (byte) 'E', 0);
+        return new ResponsePacket(this.sequence, Constants.ARB_PACKET_ENDCMD, 0);
     }
 
 }

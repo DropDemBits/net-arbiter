@@ -643,13 +643,13 @@ module pervasive NetArbiter
             % Launch the arbiter process
             put "Starting arbiter with command: \"", realCommand, '"'
             
-            if not Sys.Exec (realCommand) then
+            /*if not Sys.Exec (realCommand) then
                 % Error in starting the net arbiter process
                 % Note: "Error.Last" contains more information about the
                 % specific error
                 errno := ARB_ERROR_STARUP_FAILED
                 return
-            end if
+            end if*/
             
             % Wait for a bit to allow the arbiter to initialize
             delay (100)

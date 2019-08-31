@@ -32,7 +32,7 @@ public class ExitPacket extends CommandPacket
     {
         arbiter.getConnection(-1).closeConnection();
         // Will not be used, but add one just in case
-        return new ResponsePacket(this.sequence, (byte) 'E', 0);
+        return new ResponsePacket(this.sequence, Constants.ARB_PACKET_ENDCMD, 0);
     }
 
 }

@@ -36,7 +36,7 @@ public class DisconnectPacket extends CommandPacket
     @Override
     public ResponsePacket execute(NetArbiter arbiter)
     {
-        return new ResponsePacket(this.sequence, (byte) 'E', arbiter.closeConnection(connID));
+        return new ResponsePacket(this.sequence, Constants.ARB_PACKET_ENDCMD, arbiter.closeConnection(connID));
     }
 
 }
