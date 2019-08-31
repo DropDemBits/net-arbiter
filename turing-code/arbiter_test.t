@@ -92,6 +92,10 @@ process EndpointTest ()
         return
     end if
     
+    %loop
+    %    exit when not shouldRun
+    %end loop
+    
     %% Connect to the remote arbiter %%
     put "Connecting to a remote arbiter"
     connID := arb -> connectTo ("localhost", 8087)
@@ -113,19 +117,25 @@ process EndpointTest ()
     for i : 1 .. length (TEST_STRING)
         data (i) := ord (TEST_STRING (i))
     end for
-    
+        
     % Keep track of recieve interval
     var recvStart : int := Time.Elapsed
     
     loop
         exit when not shouldRun
         
+        locate (maxrow, maxcol - 1)
+        put 0 ..
+        
         % Send test data
         var sendStart : int := Time.Elapsed
         len := arb -> writePacket (connID, data)
         sendTime += Time.Elapsed - sendStart
         sendCycles += 1
-    
+        
+        locate (maxrow, maxcol - 1)
+        put 1 ..
+        
         %% Receive the echo'd data %%
         if arb -> poll() then
             loop
@@ -141,7 +151,7 @@ process EndpointTest ()
                 for i : 0 .. packet -> size - 1
                     put char @ (packet -> getPayload () + i) ..
                 end for
-                
+                    
                 recvCounter += 1
                 
                 % Stop once there's no more packets to process
@@ -154,6 +164,9 @@ process EndpointTest ()
             recvCycles += 1
             recvStart := Time.Elapsed
         end if
+        
+        locate (maxrow, maxcol - 1)
+        put 2 ..
         
         % Print statistics
         locate (maxrow - 2, 1)
@@ -177,13 +190,13 @@ process EndpointTest ()
         
         if Time.Elapsed - recvTimer > 1000 then
             locate (maxrow - 0, maxcol div 2)
-            put "RecvAmt: ", recvCounter ..
+            put "RecvAmt:", intstr(recvCounter, 4) ..
             
             recvCounter := 0
             recvTimer := Time.Elapsed
         end if
         
-        Time.DelaySinceLast (2)
+        Time.DelaySinceLast (4)
     end loop
     
     %% Disconnect %%
@@ -236,7 +249,7 @@ process ListenerTest ()
                 
                 exit when not arb -> nextStatus()
             end loop
-        
+            
             % Process all of the packets
             loop
                 var packet : ^Packet := arb -> getPacket ()
@@ -251,7 +264,7 @@ process ListenerTest ()
                 for i : 0 .. packet -> size - 1
                     put char @ (packet -> getPayload() + i) ..
                 end for
-                put ""
+                    put ""
                 
                 % Write back some data
                 var sendBack : string := ""
@@ -264,7 +277,7 @@ process ListenerTest ()
                 for i : 1 .. upper (data)
                     data(i) := ord (sendBack (i))
                 end for
-                
+                    
                 var dmy := arb -> writePacket (packet -> connID, data)
                 
                 exit when not arb -> nextPacket ()
@@ -289,7 +302,7 @@ put "bam"
 for i : 1 .. 2
     fork EndpointTest ()
 end for
-
+    
 loop
     exit when not shouldRun
     shouldRun := not Input.hasch ()

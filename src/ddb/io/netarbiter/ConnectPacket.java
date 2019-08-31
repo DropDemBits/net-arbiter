@@ -11,13 +11,13 @@ import java.nio.charset.StandardCharsets;
  * packetSequence: 2 bytes (commands only)
  * packetID:       1 byte ('C')
  * port:           2 bytes
- * hostlen:        2 bytes
+ * hostlen:        1 byte
  * hostname:       "hostlen" bytes
  *
  * | 0    | 1   | 2   | 3    |
  * |     len    |    seq     |
  * | 'C'  |   port    | hLen |
- * | hLen |    hostname ...  |
+ * |        hostname ...     |
  */
 public class ConnectPacket extends CommandPacket
 {
@@ -35,8 +35,8 @@ public class ConnectPacket extends CommandPacket
 
         // Fetch the port & hostname
         this.port = (Byte.toUnsignedInt(payload[0]) << 8) | Byte.toUnsignedInt(payload[1]);
-        int hostLen = (Byte.toUnsignedInt(payload[2]) << 8) | Byte.toUnsignedInt(payload[3]);
-        this.hostname = new String(payload, 4, hostLen, StandardCharsets.US_ASCII);
+        int hostLen = Byte.toUnsignedInt(payload[2]);
+        this.hostname = new String(payload, 3, hostLen, StandardCharsets.US_ASCII);
 
         return true;
     }

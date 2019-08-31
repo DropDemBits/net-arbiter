@@ -27,11 +27,10 @@ fcn connectTo (netSock : int, hostname : string, port : nat2) : nat2
     packet (5) := (port shr 8) & 16#FF
     packet (6) := (port shr 0) & 16#FF
     % Length
-    packet (7) := ((length(hostname)) shr 8) & 16#FF
-    packet (8) := ((length(hostname)) shr 0) & 16#FF
+    packet (7) := ((length(hostname)) shr 0) & 16#FF
     % Name
     for i: 0 .. (length(remoteHostname) - 1)
-        packet(9 + i) := nat1 @ (addr(hostname) + i)
+        packet(8 + i) := nat1 @ (addr(hostname) + i)
     end for
     
     put "SEND IT! ", upper(packet) + 1

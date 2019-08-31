@@ -1,9 +1,7 @@
 package ddb.io.netarbiter;
 
 import java.io.*;
-import java.net.ConnectException;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
+import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
 import java.util.*;
@@ -49,6 +47,9 @@ public class NetArbiter {
     private Connection cmdConnection;
     private static final byte[] CLIENT_MAGIC = new byte[] { (byte) 0xAB, (byte) 0x1C };
     private static final byte[] SERVER_MAGIC = new byte[] { (byte) 0xCA, (byte) 0xC0 };
+
+    // Minimum 100ms between heartbeats
+    public static final long HEARBEAT_INTERVAL = 100;
 
     private NetArbiter(int endpoint, int listen) {
         this.endpointPort = endpoint;
@@ -108,6 +109,7 @@ public class NetArbiter {
     {
         assert (connection != null && channel != null);
         channel.configureBlocking(false);
+        channel.setOption(StandardSocketOptions.TCP_NODELAY, true);
         // Listen for both reads and writes
         channel.register(channels, SelectionKey.OP_READ | SelectionKey.OP_WRITE, connection);
         activeConnections.put((int) connection.getConnectionID(), connection);
@@ -146,9 +148,6 @@ public class NetArbiter {
             channel.configureBlocking(false);
             temp.flip();
             temp.get(readBytes);
-
-            /*System.out.println("HEY SSIG");
-            dumpBytes(readBytes);*/
 
             if (!Arrays.equals(readBytes, SERVER_MAGIC))
             {
@@ -253,7 +252,16 @@ public class NetArbiter {
         // Process packets
         while (readBuffer.hasRemaining())
         {
-            System.out.println("Data Recv: " + readBuffer.remaining());
+            //System.out.println("Data Recv: " + readBuffer.remaining());
+
+            // Check if enough time has passed since the last heartbeat was sent
+            if (!connection.isCommandConnection() && connection.getLastSentBeat() > HEARBEAT_INTERVAL)
+            {
+                final ByteBuffer poke = ByteBuffer.allocateDirect(2);
+                poke.clear();
+                channel.write(poke);
+                connection.updateSentHeartbeat();
+            }
 
             // Fetch initial packet length
             if (readBuffer.remaining() < 2)
@@ -265,6 +273,9 @@ public class NetArbiter {
             }
 
             int packetLength = Short.toUnsignedInt(readBuffer.getShort());
+
+            // Update the recieved heartbeat
+            connection.updateHeartbeat();
 
             // Skip empty / heartbeat packets
             if (packetLength == 0)
@@ -295,11 +306,14 @@ public class NetArbiter {
                 channel.read(readBuffer);
                 assert (!readBuffer.hasRemaining());
                 readBuffer.flip();
+                readBuffer.position(2);
                 processBuffer = readBuffer;
             }
             else {
                 processBuffer = readBuffer;
             }
+
+            //System.out.println("Dl " + processBuffer.remaining() + ", " + packetLength);
 
             // Copy the entire packet
             byte[] data = new byte[packetLength];
@@ -315,7 +329,6 @@ public class NetArbiter {
                 connection.enqueueResponse((ResponsePacket) packet);
         }
 
-        // Update the heartbeat
         connection.updateHeartbeat();
     }
 
@@ -326,8 +339,8 @@ public class NetArbiter {
         channels = Selector.open();
         SocketChannel endpoint = endpointServer.accept();
         ByteBuffer poke = ByteBuffer.allocateDirect(2);
-        ByteBuffer readBuffer = ByteBuffer.allocate(23);
-        ByteBuffer writeBuffer = ByteBuffer.allocateDirect(2048);
+        ByteBuffer readBuffer = ByteBuffer.allocateDirect(256);
+        ByteBuffer writeBuffer = ByteBuffer.allocateDirect(1024);
 
         // Initialize the command connection
         cmdConnection = new Connection((short)allocateID(true), endpoint);
@@ -343,6 +356,8 @@ public class NetArbiter {
 
         Queue<CommandPacket> commandQueue = new LinkedBlockingDeque<>();
 
+        System.out.println("Connection with endpoint established");
+
         while(isRunning)
         {
             // Process the pending command packets
@@ -350,7 +365,7 @@ public class NetArbiter {
             {
                 CommandPacket packet = commandQueue.remove();
 
-                // TODO: Execute connect command:
+                // Execute connect command:
                 // \ Connect to a remote host
                 //  \ Perform a connection w/ SocketChannel
                 //  \ Allocate a connection id
@@ -367,7 +382,7 @@ public class NetArbiter {
                 //  \ Perform a disconnection w/ SocketChannel
                 //  \ Free the connection id
                 // \ Send back a response
-                //  \ Send back the sequence id with the connID as payload (if success)
+                //  \ Send back the sequence id with 0 as payload (if success)
                 //  \ Send back the sequence id with the error as payload (if failure)
 
                 // Execute write command:
@@ -387,6 +402,14 @@ public class NetArbiter {
             {
                 try
                 {
+                    // Send the heartbeat
+                    if (!connection.isClosed() && !connection.isCommandConnection() && connection.getLastSentBeat() > HEARBEAT_INTERVAL)
+                    {
+                        poke.clear();
+                        connection.channel.write(poke);
+                        connection.updateSentHeartbeat();
+                    }
+
                     assert (!writeBuffer.hasRemaining());
                     writeBuffer.clear();
 
@@ -422,11 +445,11 @@ public class NetArbiter {
                         writeBuffer.put(packet.responseData);
 
                         // If the queue will be empty, write out the remaining packets
-                        if (connection.responseQueue.isEmpty())
-                        {
-                            writeBuffer.flip();
-                            cmdConnection.channel.write(writeBuffer);
-                        }
+                        //if (connection.responseQueue.isEmpty())
+                        //{
+                        writeBuffer.flip();
+                        cmdConnection.channel.write(writeBuffer);
+                        //}
                     }
 
                     assert (!writeBuffer.hasRemaining());
@@ -483,15 +506,15 @@ public class NetArbiter {
                         // Payload
                         writeBuffer.put(payload);
 
-                        // If the queue will be empty, write out the remaining packets
+                        // If the queue will be empty, write out the remaining
+                        // packets
                         if (connection.writeQueue.isEmpty())
                         {
                             writeBuffer.flip();
                             connection.channel.write(writeBuffer);
                         }
                     }
-                }
-                catch (IOException e)
+                } catch (IOException e)
                 {
                     // Exception occurred, close the connection
                     e.printStackTrace();
@@ -499,10 +522,12 @@ public class NetArbiter {
                 }
 
                 // Check if the connection is dead or closed
-                if (connection.isDead() || connection.isClosed())
+                if (connection.isClosed())
                 {
-                    if(connection.isDead())
+                    if (connection.isDead())
                         System.out.println("Connection #" + connection.getConnectionID() + " died, closing");
+                    else
+                        System.out.println("Connection #" + connection.getConnectionID() + " was closed");
 
                     // Alert the endpoint of the connection closure
                     if (connection.getConnectionID() != -1)
@@ -517,10 +542,6 @@ public class NetArbiter {
                     freeID(connection.getConnectionID());
                     continue;
                 }
-
-                // Send the heartbeat
-                if (!connection.isClosed() && !connection.isCommandConnection())
-                    connection.channel.write(poke);
             }
 
             // Prune all the dead connections
@@ -534,72 +555,77 @@ public class NetArbiter {
             }
 
             // Process inbound packets
-            if(channels.select() <= 0)
-                continue;
-
-            Set<SelectionKey> keys = channels.selectedKeys();
-            Iterator<SelectionKey> iterator = keys.iterator();
-
-            // Go through all of the keys
-            while(iterator.hasNext())
+            if (channels.select() > 0)
             {
-                SelectionKey key = iterator.next();
+                Set<SelectionKey> keys = channels.selectedKeys();
+                Iterator<SelectionKey> iterator = keys.iterator();
 
-                if (key.isAcceptable())
+                // Go through all of the keys
+                while (iterator.hasNext())
                 {
-                    final byte[] readBytes = new byte[2];
-                    SocketChannel channel = ((ServerSocketChannel) key.channel()).accept();
+                    SelectionKey key = iterator.next();
 
-                    // Listen for the client magic
-                    readBuffer.clear();
-                    channel.configureBlocking(true);
-                    channel.read(readBuffer);
-                    readBuffer.flip();
-                    readBuffer.get(readBytes);
-
-                    /*System.out.println("HEY CSIG");
-                    dumpBytes(readBytes);*/
-
-                    if (!Arrays.equals(readBytes, CLIENT_MAGIC))
+                    if (key.isAcceptable())
                     {
-                        // Refuse the connection & continue
-                        channel.close();
-                        continue;
+                        final byte[] readBytes = new byte[2];
+                        SocketChannel channel = ((ServerSocketChannel) key.channel()).accept();
+
+                        // Listen for the client magic
+                        readBuffer.clear();
+                        channel.configureBlocking(true);
+                        channel.read(readBuffer);
+                        readBuffer.flip();
+                        readBuffer.get(readBytes);
+
+                        if (!Arrays.equals(readBytes, CLIENT_MAGIC))
+                        {
+                            // Refuse the connection & continue
+                            channel.close();
+                        }
+                        else
+                        {
+                            // Write back the server magic
+                            writeBuffer.clear();
+                            writeBuffer.put(SERVER_MAGIC);
+                            writeBuffer.flip();
+                            channel.write(writeBuffer);
+                            channel.configureBlocking(false);
+
+                            // Accept the new connection, sending back connID as a response
+                            int connID = addConnection(new Connection((short) allocateID(false), channel), channel);
+                            ResponsePacket response = new ResponsePacket(0, Constants.ARB_PACKET_NEWCONN, connID);
+                            cmdConnection.enqueueResponse(response);
+                        }
                     }
 
-                    // Write back the server magic
-                    writeBuffer.clear();
-                    writeBuffer.put(SERVER_MAGIC);
-                    writeBuffer.flip();
-                    channel.write(writeBuffer);
-                    channel.configureBlocking(false);
+                    if (key.isReadable())
+                    {
+                        // Read packets from the connection
+                        SocketChannel channel = (SocketChannel) key.channel();
+                        Connection connection = (Connection) key.attachment();
 
-                    // Accept the new connection, sending back connID as a response
-                    int connID = addConnection(new Connection((short) allocateID(false), channel), channel);
-                    ResponsePacket response = new ResponsePacket(0, Constants.ARB_PACKET_NEWCONN, connID);
-                    cmdConnection.enqueueResponse(response);
+                        try
+                        {
+                            processPackets(readBuffer, channel, connection, commandQueue);
+                        } catch (IOException e)
+                        {
+                            e.printStackTrace();
+                            connection.closeConnection();
+                        }
+                    }
+
+
+                    iterator.remove();
                 }
-
-                if (key.isReadable())
-                {
-                    // Read packets from the connection
-                    SocketChannel channel = (SocketChannel) key.channel();
-                    Connection connection = (Connection) key.attachment();
-
-                    try
-                    {
-                        processPackets(readBuffer, channel, connection, commandQueue);
-                    }
-                    catch (IOException e)
-                    {
-                        e.printStackTrace();
-                        connection.closeConnection();
-                    }
-                }
-
-
-                iterator.remove();
             }
+
+            // Update the dead status
+            // Update here to allow a chance for the heartbeat to be updated
+            // above, in case of a large amount of packets flowing
+            activeConnections.values().forEach((connection) -> {
+                if (connection.isDead())
+                    connection.closeConnection();
+            });
         }
     }
 
@@ -678,16 +704,18 @@ public class NetArbiter {
             return;
         }
 
+        System.out.println("Is server: " + (ports[1] != -1));
+
         // Launch the arbiter
         NetArbiter arbiter = new NetArbiter(ports[0], ports[1]);
         arbiter.startArbiter();
 
-        /*try {
+        try {
             System.out.println("Press any key to continue");
             System.in.read();
         } catch (IOException e) {
             e.printStackTrace();
-        }*/
+        }
     }
 
 }

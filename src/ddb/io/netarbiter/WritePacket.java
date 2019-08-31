@@ -45,7 +45,7 @@ public class WritePacket extends CommandPacket
     @Override
     public ResponsePacket execute(NetArbiter arbiter)
     {
-        System.out.println("Writting packet to #" + connID);
+        //System.out.println("Writting packet to #" + connID);
         Connection connection = arbiter.getConnection(connID);
 
         // Return an error code for the response

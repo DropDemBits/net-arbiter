@@ -18,6 +18,7 @@ public class Connection
     // The last time the heartbeat was received or sent, as a timestamp in
     // milliseconds
     private long lastHeartbeat;
+    private long lastHeartbeatSent;
 
     /**
      * Creates a new connection
@@ -77,7 +78,7 @@ public class Connection
     }
 
     /**
-     * Updates the current heartbeat timestamp
+     * Updates the current received heartbeat timestamp
      */
     public void updateHeartbeat()
     {
@@ -85,13 +86,30 @@ public class Connection
     }
 
     /**
+     * Updates the last sent heartbeat
+     */
+    public void updateSentHeartbeat()
+    {
+        lastHeartbeatSent = System.currentTimeMillis();
+    }
+
+    /**
+     * Gets the time since the last heartbeat was sent
+     * @return The time since the last heartbeat
+     */
+    public long getLastSentBeat()
+    {
+        return System.currentTimeMillis() - lastHeartbeatSent;
+    }
+
+    /**
      * Checks if the connection hasn't sent a heartbeat
+     * If the connection is a command connection, it will never die
      * @return If the connection is dead or not
      */
     public boolean isDead()
     {
-        //return (System.currentTimeMillis() - lastHeartbeat) > ARREST_TIMER;
-        return false;
+        return !isCommand && (System.currentTimeMillis() - lastHeartbeat) > ARREST_TIMER;
     }
 
 }
