@@ -1,31 +1,35 @@
 package ddb.io.netarbiter;
 
-public class Constants {
+public class Constants
+{
+    // Magic
+    public static final byte[] CLIENT_MAGIC = new byte[] { (byte) 0xAB, (byte) 0x1C };
+    public static final byte[] SERVER_MAGIC = new byte[] { (byte) 0xCA, (byte) 0xC0 };
 
-    // Packet IDs
-    public static final int PCKTID_HEADER = 'a' << 24 | 'r' << 16 | 'b' << 8;
-    public static final int PCKTID_CONNECT_ESTABLISH = 0;
-    public static final int PCKTID_ACK = 1;
-    public static final int PCKTID_DISCONNECT_NOTIFY = 2;
+    // Minimum 100ms between heartbeats
+    public static final long HEARBEAT_INTERVAL = 100;
 
-    // Arbiter Commands
-    public static final byte ARB_CMD_EXIT =             'X';
-    public static final byte ARB_CMD_CONNECT =          'C';
-    public static final byte ARB_CMD_DISCONNECT =       'D';
-    public static final byte ARB_CMD_SEND =             'P';
+    // Command packets
+    public static final byte ARB_PACKET_CONNECT       = (byte) 'C';
+    public static final byte ARB_PACKET_DISCONNECT    = (byte) 'D';
+    public static final byte ARB_PACKET_STATUS        = (byte) 'S';
+    public static final byte ARB_PACKET_WRITE         = (byte) 'W';
+    public static final byte ARB_PACKET_EXIT          = (byte) 'X';
 
-    // Arbiter Responses
-    public static final byte ARB_REP_DATA_RECEIVED =    'G';
-    public static final byte ARB_REP_NEW_CONNECTION =   'N';
-    public static final byte ARB_REP_REMOTE_CLOSED =    'R';
-    public static final byte ARB_REP_CMD_SUCCESSFUL =   'S';
-    public static final byte ARB_REP_ERROR =            'W';
+    // Remote packets
+    public static final byte ARB_PACKET_READ          = (byte) 'R';
 
-    // Arbiter Errors
-    public static final short ARB_ERR_NONE = 0;
-    public static final short ARB_ERR_CONNECTION_FAILED = 1;
-    public static final short ARB_ERR_INVALID_ARG = 2;
+    // Response packets
+    public static final byte ARB_PACKET_ENDCMD        = (byte) 'E';
+    public static final byte ARB_PACKET_ENDCONN       = (byte) 'F';
+    public static final byte ARB_PACKET_NEWCONN       = (byte) 'N';
 
-    // Only for constant declarations
-    private Constants() {}
+    // Errors
+    public static final int ARB_ERROR_NONE            =  0;
+    public static final int ARB_ERROR_UNKNOWN_ERROR   = -1;
+    public static final int ARB_ERROR_INVALID_ID      = -2;
+
+    // Connection related
+    public static final int ARB_ERROR_CONNECT_REFUSED = -3;
+    public static final int ARB_ERROR_BAD_ADDRESS     = -4;
 }
