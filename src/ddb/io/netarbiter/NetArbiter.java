@@ -49,6 +49,8 @@ public class NetArbiter {
     // ConnectionChange (connID): Notification of a connection status change (New Connection, Disconnected)
     // Read (connID, len, payload): Packet recieved
 
+    private static boolean DEBUG = false;
+
     private boolean isRunning = true;
     private int endpointPort, listenPort;
     private Connection cmdConnection;
@@ -389,9 +391,9 @@ public class NetArbiter {
             if (connection.isClosed())
             {
                 if (connection.isDead())
-                    System.out.println("Connection #" + connection.getConnectionID() + " died, closing");
+                    if (DEBUG) System.out.println("Connection #" + connection.getConnectionID() + " died, closing");
                 else
-                    System.out.println("Connection #" + connection.getConnectionID() + " was closed");
+                    if (DEBUG) System.out.println("Connection #" + connection.getConnectionID() + " was closed");
 
                 // Alert the endpoint of the connection closure
                 if (connection.getConnectionID() != -1)
@@ -453,7 +455,7 @@ public class NetArbiter {
 
     private void processChannels() throws IOException
     {
-        System.out.println("Waiting for connections");
+        if (DEBUG) System.out.println("Waiting for connections");
 
         channels = Selector.open();
         connectionManager.init(channels);
@@ -478,7 +480,7 @@ public class NetArbiter {
 
         Queue<CommandPacket> commandQueue = new LinkedBlockingDeque<>();
 
-        System.out.println("Connection with endpoint established");
+        if (DEBUG) System.out.println("Connection with endpoint established");
 
         while(isRunning)
         {
@@ -488,7 +490,7 @@ public class NetArbiter {
             // Check if the command connection was closed
             if (cmdConnection.isClosed())
             {
-                System.out.println("Shutting down");
+                if (DEBUG) System.out.println("Shutting down");
                 break;
             }
 
@@ -536,6 +538,9 @@ public class NetArbiter {
                 case "listenPort":
                     listenPort = Integer.parseInt(components[1]);
                     break;
+                case "debug":
+                    DEBUG = true;
+                    break;
                 default:
                     System.out.println("Unknown argument \"" + components[0] + "\"");
                     return false;
@@ -566,7 +571,7 @@ public class NetArbiter {
     public static void main(String[] args) {
         // Gather connection information
         if (args.length < 1 || args.length > 2) {
-            System.out.println("Usage: arbiter [--endpointPort=[port]] (--listenPort=[port])");
+            System.out.println("Usage: arbiter [--endpointPort=[port]] (--listenPort=[port]) (--debug)");
             return;
         }
 
@@ -576,7 +581,7 @@ public class NetArbiter {
             return;
         }
 
-        System.out.println("Is server: " + (ports[1] != -1));
+        if (DEBUG) System.out.println("Is server: " + (ports[1] != -1));
 
         // Launch the arbiter
         NetArbiter arbiter = new NetArbiter(ports[0], ports[1]);

@@ -86,8 +86,6 @@ public class ConnectionManager
 
     public int addConnection(String hostname, int port)
     {
-        System.out.println("Connection add " + hostname + ":" + port);
-
         try
         {
             // Connect to the remote host
@@ -155,7 +153,6 @@ public class ConnectionManager
      */
     public int closeConnection(int connID)
     {
-        System.out.println("Disconnecting to ...");
         Connection connection = activeConnections.get(connID);
 
         if (connection == null)

@@ -37,7 +37,7 @@ public class PacketParser
             // Command packets
             case 'C': packet = new ConnectPacket(packetSequence);    break;
             case 'D': packet = new DisconnectPacket(packetSequence); break;
-            case 'S': System.out.println("Fetching status of ...");  break; // StatusPacket
+            case 'S': /*System.out.println("Fetching status of ...");*/  break; // StatusPacket
             case 'W': packet = new WritePacket(packetSequence);      break;
             case 'X': packet = new ExitPacket(packetSequence);       break;
             // Remote packets

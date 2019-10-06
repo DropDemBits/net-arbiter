@@ -34,8 +34,6 @@ public class ConnectPacket extends CommandPacket
     @Override
     public boolean parsePayload(byte[] payload)
     {
-        System.out.println("Connecting to ...");
-
         // Fetch the port & hostname
         this.port = (Byte.toUnsignedInt(payload[0]) << 8) | Byte.toUnsignedInt(payload[1]);
         int hostLen = Byte.toUnsignedInt(payload[2]);

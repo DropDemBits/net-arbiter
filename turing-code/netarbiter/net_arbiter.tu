@@ -723,7 +723,9 @@ module pervasive NetArbiter
             end if
         
             % TODO: Start the net arbiter process
-            const CMD_STRING : string := "java -jar ./netarbiter/net-arbiter.jar"
+            const CMD_STRING : string :=
+                "javaw -jar ./netarbiter/net-arbiter.jar"
+                %"javaw -cp ..//out/production/turing-net-arbiter ddb.io.netarbiter.NetArbiter"
             
             % Build the command string
             var realCommand : string := ""
@@ -738,7 +740,10 @@ module pervasive NetArbiter
             % Launch the arbiter process
             put "Starting arbiter with command: \"", realCommand, '"'
             
-            if not Sys.Exec (realCommand) then
+            var retval : int
+            system (realCommand, retval)
+            
+            if retval not= 0 then
                 % Error in starting the net arbiter process
                 % Note: "Error.Last" contains more information about the
                 % specific error
