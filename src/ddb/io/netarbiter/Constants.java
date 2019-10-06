@@ -2,6 +2,12 @@ package ddb.io.netarbiter;
 
 public class Constants
 {
+    // Magic
+    public static final byte[] CLIENT_MAGIC = new byte[] { (byte) 0xAB, (byte) 0x1C };
+    public static final byte[] SERVER_MAGIC = new byte[] { (byte) 0xCA, (byte) 0xC0 };
+
+    // Minimum 100ms between heartbeats
+    public static final long HEARBEAT_INTERVAL = 100;
 
     // Command packets
     public static final byte ARB_PACKET_CONNECT       = (byte) 'C';

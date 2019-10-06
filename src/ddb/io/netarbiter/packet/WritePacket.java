@@ -1,4 +1,8 @@
-package ddb.io.netarbiter;
+package ddb.io.netarbiter.packet;
+
+import ddb.io.netarbiter.Connection;
+import ddb.io.netarbiter.Constants;
+import ddb.io.netarbiter.NetArbiter;
 
 import java.util.Arrays;
 
@@ -46,7 +50,7 @@ public class WritePacket extends CommandPacket
     public ResponsePacket execute(NetArbiter arbiter)
     {
         //System.out.println("Writting packet to #" + connID);
-        Connection connection = arbiter.getConnection(connID);
+        Connection connection = arbiter.getConnectionManager().getConnection(connID);
 
         // Return an error code for the response
         if (connection == null)

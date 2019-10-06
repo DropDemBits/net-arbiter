@@ -1,4 +1,6 @@
-package ddb.io.netarbiter;
+package ddb.io.netarbiter.packet;
+
+import ddb.io.netarbiter.NetArbiter;
 
 public abstract class CommandPacket extends Packet
 {

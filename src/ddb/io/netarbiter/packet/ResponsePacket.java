@@ -1,4 +1,4 @@
-package ddb.io.netarbiter;
+package ddb.io.netarbiter.packet;
 
 import java.util.Arrays;
 

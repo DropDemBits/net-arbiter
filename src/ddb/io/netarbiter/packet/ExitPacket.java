@@ -1,4 +1,7 @@
-package ddb.io.netarbiter;
+package ddb.io.netarbiter.packet;
+
+import ddb.io.netarbiter.Constants;
+import ddb.io.netarbiter.NetArbiter;
 
 /**
  * Exit Command Packet
@@ -30,7 +33,7 @@ public class ExitPacket extends CommandPacket
     @Override
     public ResponsePacket execute(NetArbiter arbiter)
     {
-        arbiter.getConnection(-1).closeConnection();
+        arbiter.getConnectionManager().getConnection(-1).closeConnection();
         // Will not be used, but add one just in case
         return new ResponsePacket(this.sequence, Constants.ARB_PACKET_ENDCMD, 0);
     }

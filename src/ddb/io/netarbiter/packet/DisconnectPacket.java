@@ -1,4 +1,7 @@
-package ddb.io.netarbiter;
+package ddb.io.netarbiter.packet;
+
+import ddb.io.netarbiter.Constants;
+import ddb.io.netarbiter.NetArbiter;
 
 /**
  * Disconnect Command Packet
@@ -36,7 +39,7 @@ public class DisconnectPacket extends CommandPacket
     @Override
     public ResponsePacket execute(NetArbiter arbiter)
     {
-        return new ResponsePacket(this.sequence, Constants.ARB_PACKET_ENDCMD, arbiter.closeConnection(connID));
+        return new ResponsePacket(this.sequence, Constants.ARB_PACKET_ENDCMD, arbiter.getConnectionManager().closeConnection(connID));
     }
 
 }

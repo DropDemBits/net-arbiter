@@ -1,4 +1,7 @@
-package ddb.io.netarbiter;
+package ddb.io.netarbiter.packet;
+
+import ddb.io.netarbiter.Constants;
+import ddb.io.netarbiter.NetArbiter;
 
 import java.nio.charset.StandardCharsets;
 
@@ -44,7 +47,7 @@ public class ConnectPacket extends CommandPacket
     @Override
     public ResponsePacket execute(NetArbiter arbiter)
     {
-        int response = arbiter.addConnection(hostname, port);
+        int response = arbiter.getConnectionManager().addConnection(hostname, port);
 
         // Response code contains the connection id
         return new ResponsePacket(this.sequence, Constants.ARB_PACKET_ENDCMD, response);

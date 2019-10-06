@@ -1,5 +1,8 @@
 package ddb.io.netarbiter;
 
+import ddb.io.netarbiter.packet.ResponsePacket;
+import ddb.io.netarbiter.packet.WritePacket;
+
 import java.nio.channels.SocketChannel;
 import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
