@@ -746,11 +746,16 @@ module pervasive NetArbiter
                 return
             end if
             
-            % Wait for a bit to allow the arbiter to initialize
-            delay (100)
             
-            % Connect to the net arbiter
-            netFD := Net.OpenConnectionBinary ("localhost", arbiterPort)
+            % Attempt to connect to the net arbiter 10 times before failing
+            % Have increasing delay so that connection attempts aren't spaced together
+            for try : 1 .. 10
+                netFD := Net.OpenConnectionBinary ("localhost", arbiterPort)
+                exit when netFD >= 0
+                
+                % Wait for at least 10ms, up to 10 seconds
+                delay (10 * (1 shl try))
+            end for
             
             if netFD < 0 then
                 % Net socket connection error (connection refused)

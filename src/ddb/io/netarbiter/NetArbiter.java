@@ -42,7 +42,7 @@ public class NetArbiter {
     // ConnectionChange (connID): Notification of a connection status change (New Connection, Disconnected)
     // Read (connID, len, payload): Packet recieved
 
-    boolean isRunning = true;
+    private boolean isRunning = true;
     private int endpointPort, listenPort;
     private Connection cmdConnection;
     private static final byte[] CLIENT_MAGIC = new byte[] { (byte) 0xAB, (byte) 0x1C };
@@ -508,11 +508,11 @@ public class NetArbiter {
 
                         // If the queue will be empty, write out the remaining
                         // packets
-                        if (connection.writeQueue.isEmpty())
-                        {
+                        //if (connection.writeQueue.isEmpty())
+                        //{
                             writeBuffer.flip();
                             connection.channel.write(writeBuffer);
-                        }
+                        //}
                     }
                 } catch (IOException e)
                 {
@@ -540,7 +540,6 @@ public class NetArbiter {
                     connection.closeConnection();
                     connection.channel.close();
                     freeID(connection.getConnectionID());
-                    continue;
                 }
             }
 
@@ -629,7 +628,7 @@ public class NetArbiter {
         }
     }
 
-    public void startArbiter()
+    private void startArbiter()
     {
         try
         {
@@ -709,13 +708,6 @@ public class NetArbiter {
         // Launch the arbiter
         NetArbiter arbiter = new NetArbiter(ports[0], ports[1]);
         arbiter.startArbiter();
-
-        try {
-            System.out.println("Press any key to continue");
-            System.in.read();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
     }
 
 }

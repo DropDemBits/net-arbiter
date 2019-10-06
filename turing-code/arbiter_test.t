@@ -196,7 +196,7 @@ process EndpointTest ()
             recvTimer := Time.Elapsed
         end if
         
-        Time.DelaySinceLast (4)
+        Time.DelaySinceLast (60)
     end loop
     
     %% Disconnect %%
@@ -299,7 +299,7 @@ fork ListenerTest ()
 put "hop"
 delay (2000)
 put "bam"
-for i : 1 .. 2
+for i : 1 .. 5
     fork EndpointTest ()
 end for
     
