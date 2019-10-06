@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<project name="NetArbiter" default="package">
+    <property name="build.dir" value="out/export"/>
+    <property name="jar.dir" value="out/export/jars"/>
+    <property name="turingsrc.dir" value="turing-code"/>
+    <property name="src.dir" value="src"/>
+    <property name="version" value="1.0.0"/>
+
+    <target name="package" depends="build-jar">
+        <echo>Packaging Distribution File</echo>
+
+        <zip destfile="${build.dir}/net-arbiter_${version}.zip">
+            <zipfileset dir="${turingsrc.dir}/netarbiter" includes="net_arbiter.tu" fullpath="netarbiter/net_arbiter.tu"/>
+            <zipfileset dir="${build.dir}/jars" includes="net-arbiter.jar" fullpath="netarbiter/net-arbiter.jar"/>
+        </zip>
+    </target>
+
+    <target name="build-jar" depends="compile">
+        <mkdir dir="${build.dir}/jars"/>
+
+        <jar destfile="${build.dir}/jars/net-arbiter.jar" basedir="${build.dir}/classes">
+            <manifest>
+                <attribute name="Main-Class" value="ddb.io.netarbiter.NetArbiter"/>
+            </manifest>
+        </jar>
+    </target>
+
+    <target name="compile">
+        <mkdir dir="${build.dir}/classes"/>
+
+        <javac destdir="${build.dir}/classes" source="1.8" target="1.8" debug="false"
+               deprecation="false" optimize="true" failonerror="true">
+            <src path="${src.dir}"/>
+        </javac>
+    </target>
+</project>
