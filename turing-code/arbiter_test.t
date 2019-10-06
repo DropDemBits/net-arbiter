@@ -1,6 +1,6 @@
 % Arbiter Test
 % Tests the functions of the arbiter
-import NetArbiter in "net_arbiter.t"
+import NetArbiter in "netarbiter/net_arbiter.tu"
 
 
 %%% Types & Classes %%%

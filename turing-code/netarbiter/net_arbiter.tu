@@ -723,7 +723,7 @@ module pervasive NetArbiter
             end if
         
             % TODO: Start the net arbiter process
-            const CMD_STRING : string := "java -cp ../out/production/turing-net-arbiter ddb.io.netarbiter.NetArbiter"
+            const CMD_STRING : string := "java -jar ./netarbiter/net-arbiter.jar"
             
             % Build the command string
             var realCommand : string := ""
